@@ -9,7 +9,7 @@ let p = Nx.Ptree.tensor
 let x0 () = create float32 [| 2 |] [| 5.; -3. |]
 
 (* f(x) = 0.5 * ||x||^2, so grad f(x) = x. *)
-let f x = Infix.(sum (square x) *$ 0.5)
+let f x = sum (square x) *$ 0.5
 let steps = 50
 let report_every = 10
 
@@ -28,7 +28,7 @@ let run ~name ~init ~step =
           i
           (item [] (f params))
           (to_string params);
-      loop ~i:(i + 1) (params, state))
+      loop ~i:(succ i) (params, state))
   in
   let params = x0 () in
   loop ~i:1 (params, init p params);

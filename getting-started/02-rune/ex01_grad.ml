@@ -8,7 +8,6 @@ open Nx
 let f x = sum (square x)
 
 let () =
-  let open Infix in
   let x = create float32 [| 4 |] [| 1.; -2.; 3.; 0.5 |] in
   let g = Rune.grad' f x in
   let expected = x *$ 2.0 in
