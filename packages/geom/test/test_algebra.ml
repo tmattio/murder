@@ -389,7 +389,7 @@ let test_adjoint () =
 
 (* Batching and broadcasting *)
 
-let take0 i a = take ~axis:0 ~indices:(Nx.scalar Nx.int64 (Int64.of_int i)) a
+let take0 i a = Nx.get [ i ] a
 
 let test_batching () =
   let x = A.of_array [| 1.; 0.5; -1.; 2.; 0.25; -0.5; 1.5; -2. |] in

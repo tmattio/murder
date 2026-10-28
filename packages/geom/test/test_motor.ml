@@ -186,14 +186,11 @@ let test_rotation_matrices () =
   let batch = stack ~axis:0 [ identity; rz90 ] in
   let m = M.of_rotation batch in
   equal ~msg:"a batch of rotation matrices" (array int) [| 2; 8 |] (M.shape m);
-  check_motor
-    ~msg:"the first matrix"
-    M.one
-    (M.of_nx (take ~axis:0 ~indices:(Nx.scalar Nx.int64 0L) m));
+  check_motor ~msg:"the first matrix" M.one (M.of_nx (Nx.get [ 0 ] m));
   check_motor
     ~msg:"the second matrix"
     (rot ~axis:z_axis (Float.pi /. 2.))
-    (M.of_nx (take ~axis:0 ~indices:(Nx.scalar Nx.int64 1L) m));
+    (M.of_nx (Nx.get [ 1 ] m));
   (* Half turns have trace -1, so [of_rotation] takes one of its three
      diagonal branches instead of the trace branch. *)
   let rx180 = create f32 [| 3; 3 |] [| 1.; 0.; 0.; 0.; -1.; 0.; 0.; 0.; -1. |] in
@@ -247,7 +244,11 @@ let test_algebra () =
     ~msg:"normalize gives a unit motor"
     M.one
     (M.mul (M.normalize m) (M.inverse (M.normalize m)));
-  check_motor ~msg:"compose [] is one" M.one (M.compose []);
+  raises_match
+    ~msg:"compose [] names no set"
+    (Exn.invalid_arg ~substring:"empty list")
+    (fun () -> ignore (M.compose []));
+  check_motor ~msg:"compose [ m ] is m" m (M.compose [ m ]);
   check_motor
     ~msg:"compose applies the list in order"
     (M.compose [ m; translation (vec3 1. 2. 3.); rot ~axis:x_axis 0.4 ])

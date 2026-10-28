@@ -7,6 +7,11 @@ changes do not need an entry.
 
 ### geom
 
+- Multivectors and motors are `'d t`, polymorphic in nx's device set: an
+  operation computes where its operands lie. Constants and constructors from
+  numbers (`one`, `e`, `basis`, `of_array`, `Cga.einf`) are host values.
+- `Motor.compose []` raises `Invalid_argument`: it has no operand to make
+  `one` beside.
 - Imported from `hennequin-lab/geom`.
 
 ### cmdargs

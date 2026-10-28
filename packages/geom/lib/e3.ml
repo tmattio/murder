@@ -28,16 +28,12 @@ let batch_of_shape sh =
   if Array.length sh = 0 then [||] else Array.sub sh 0 (Array.length sh - 1)
 
 let dense batch comps =
-  let z = zeros dty batch in
+  let z = zeros_like (broadcast_to batch (snd (List.hd comps))) in
   let a = Array.make 8 z in
   List.iter (fun (i, v) -> a.(i) <- v) comps;
   stack ~axis:(-1) (Array.to_list a)
 
-let take3 v =
-  let r = Array.length (shape v) in
-  let f i = take ~axis:(r - 1) ~indices:(Nx.scalar int64 (Int64.of_int i)) v in
-  f 0, f 1, f 2
-
+let take3 v = Const.last v 0, Const.last v 1, Const.last v 2
 let e1 = A.e 1
 let e2 = A.e 2
 let e3 = A.e 3
