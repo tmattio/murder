@@ -5,9 +5,9 @@
 
 open Nx
 
-type state =
-  { q : float32_t
-  ; lambda : float32_t
+type 'd state =
+  { q : 'd float32_t
+  ; lambda : 'd float32_t
   ; iterations : int
   }
 
@@ -22,11 +22,7 @@ let batch_shape x =
 
 let init ?(lambda = 1e-3) ~q:q0 () =
   let batch = batch_shape q0 in
-  let lambda =
-    match batch with
-    | [||] -> full float32 [||] lambda
-    | _ -> full float32 batch lambda
-  in
+  let lambda = full_at (Placement.uncut (placement q0)) float32 batch lambda in
   { q = q0; lambda; iterations = 0 }
 
 (* The normal equations of one batch, collapsed to three axes so the batched
@@ -40,7 +36,8 @@ let normal_equations ~lambda error jacobian =
   let e = reshape [| bsz; dim |] error in
   let jt = transpose ~axes:[ 0; 2; 1 ] j in
   let damping =
-    Infix.(reshape [| bsz; 1; 1 |] (reshape [| bsz |] lambda) * eye float32 dof)
+    let eye = eye_at (Placement.uncut (placement lambda)) float32 dof in
+    Infix.(reshape [| bsz; 1; 1 |] (reshape [| bsz |] lambda) * eye)
   in
   let h = Infix.((jt *@ j) + damping) in
   let g = Infix.(jt *@ reshape [| bsz; dim; 1 |] e) in
@@ -80,9 +77,7 @@ let iterate ?(step_limit = 0.5) ?lower ?upper task state =
   let dof = (shape q0).(Array.length batch) in
   let step = reshape (Array.append batch [| dof |]) step in
   let largest = max ~axes:[ Array.length batch ] (abs step) in
-  let cap =
-    Infix.(scalar float32 step_limit / reshape (Array.append batch [| 1 |]) largest)
-  in
+  let cap = rdiv_s step_limit (reshape (Array.append batch [| 1 |]) largest) in
   let scale = minimum_s cap 1. in
   let delta = Infix.(scale * step) in
   let candidate = project ?lower ?upper Infix.(q0 - delta) in
@@ -112,12 +107,12 @@ let iterate ?(step_limit = 0.5) ?lower ?upper task state =
   in
   { q; lambda; iterations = state.iterations + 1 }
 
-type result =
-  { q : float32_t
-  ; residual : float32_t
+type 'd result =
+  { q : 'd float32_t
+  ; residual : 'd float32_t
   ; iterations : int
-  ; lambda : float32_t
-  ; converged : bool_t
+  ; lambda : 'd float32_t
+  ; converged : 'd bool_t
   }
 
 let all_converged converged = item [] (all converged)

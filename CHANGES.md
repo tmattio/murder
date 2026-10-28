@@ -10,6 +10,10 @@ changes do not need an entry.
 - Multivectors and motors are `'d t`, polymorphic in nx's device set: an
   operation computes where its operands lie. Constants and constructors from
   numbers (`one`, `e`, `basis`, `of_array`, `Cga.einf`) are host values.
+- `Geom_robot`: configurations, motions and twists are `'d Robot.q`,
+  `'d Robot.motion` and `'d Robot.twist`; `Task.t` and `Ik.state` take the
+  device set of their targets. A model's origins and frame poses are host
+  motions.
 - `Motor.compose []` raises `Invalid_argument`: it has no operand to make
   `one` beside.
 - Imported from `hennequin-lab/geom`.
