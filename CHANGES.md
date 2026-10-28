@@ -19,14 +19,13 @@ changes do not need an entry.
 - The user-facing solves are `solve_adaptive` and `solve_fixed`, each returning
   a reusable solve closure with the implicit reverse-mode rule. Forward-mode
   forms live in `Dilqr.Jvp`. The flat `solve_ilqr*` names are gone.
-- `solve_adaptive` compiles its tensor kernels through `Solver.compile` when
-  `~beam` or `~parallel` is supplied, and runs eagerly otherwise; the host
-  keeps the regularization and line-search control flow either way.
+- `solve_adaptive` compiles its tensor kernels through `Solver.compile` under
+  `~jit:true`, and runs eagerly otherwise; the host keeps the regularization
+  and line-search control flow either way.
 - `Solver.compile` returns the adaptive solve with its traceable kernels
   (dynamics and cost scans, linearization and Riccati pass, line-search
-  rollout) compiled by `Rune.jit`, with `~beam` and `~parallel` for the kernel
-  search. The host keeps the regularization retries and line-search control
-  flow.
+  rollout) compiled by `Rune.jit`. The host keeps the regularization retries
+  and line-search control flow.
 - `Lqr.rollout_tensor` is `Lqr.rollout` with the step size as a scalar tensor,
   so a traced line search can pass it as an argument.
 - Forward-mode differentiation: `Jvp.solve_adaptive` and `Jvp.solve_fixed`

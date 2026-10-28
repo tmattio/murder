@@ -19,11 +19,16 @@ let dt = 0.1
 
 module Integrator = struct
   module Params = struct
-    type 'a t =
+    type ('a, _) t =
       { mass : 'a
       ; target : 'a
       }
-    [@@deriving ptree]
+
+    let walk c { mass; target } =
+      let open Nx.Ptree.Walk in
+      let mass = field c "mass" leaf mass in
+      let target = field c "target" leaf target in
+      { mass; target }
   end
 
   let n = 2
@@ -52,7 +57,7 @@ module Integrator = struct
     let err = pos - target in
     sum ((err * err) + (vel * vel)) *$ 5.0
 
-  let problem : (Nx.float64_elt, Nx.float64_t Params.t) Dilqr.Problem.t =
+  let problem : (float64_elt, (host float64_t, host) Params.t, host) Dilqr.Problem.t =
     { dtype = float64
     ; n
     ; m
@@ -69,7 +74,7 @@ let scalar64 v = scalar float64 v
 let b = 4
 let targets = [| 1.0; -0.6; 0.3; 1.5 |]
 
-let theta : Nx.float64_t Integrator.Params.t =
+let theta : (host float64_t, host) Integrator.Params.t =
   { mass = broadcast_to [| b |] (scalar64 1.0)
   ; target = create float64 [| b; 1 |] targets
   }
@@ -77,7 +82,7 @@ let theta : Nx.float64_t Integrator.Params.t =
 let x0 = create float64 [| b; 2 |] [| 1.0; 0.0; 1.0; 0.0; 1.0; 0.0; 1.0; 0.0 |]
 let us0 = Array.init Integrator.horizon ~f:(fun _ -> zeros float64 [| b; 1 |])
 
-let inputs : (Nx.float64_t Integrator.Params.t, Nx.float64_t) Dilqr.Inputs.t =
+let inputs : ((host float64_t, host) Integrator.Params.t, host float64_t) Dilqr.Inputs.t =
   { Dilqr.Inputs.theta; x0; us0 }
 
 let inputs_ptree = Dilqr.inputs Integrator.problem
@@ -98,7 +103,9 @@ let () =
       (item [ i ] cost)
   done;
   (* the gradient of the summed costs w.r.t. every member's target, compiled *)
-  let total (i : (Nx.float64_t Integrator.Params.t, Nx.float64_t) Dilqr.Inputs.t) =
+  let total
+        (i : ((host float64_t, host) Integrator.Params.t, host float64_t) Dilqr.Inputs.t)
+    =
     sum (Dilqr.loss_of_taus Integrator.problem i.Dilqr.Inputs.theta (solve ~iters:8 i))
   in
   let grads =

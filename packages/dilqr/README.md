@@ -35,8 +35,8 @@ program's size grows with the iteration count, **not with the horizon**.
 - **Adaptive solve** (`solve_adaptive`) — classic iLQR: Levenberg–Marquardt
   regularization with Cholesky retries, Armijo backtracking line search,
   convergence checks. Host-side control flow, so the returned closure is
-  eager and unbatched. Pass `~beam` or `~parallel` to compile its tensor
-  kernels with `Rune.jit`; build the solver once and reuse it.
+  eager and unbatched. Pass `~jit:true` to compile its tensor kernels with
+  `Rune.jit`; build the solver once and reuse it.
 - **Traceable solve** (`solve_fixed`) — fixed iteration count, fixed
   regularization, and a line search realized as a masked argmin over a fixed
   trial schedule, so there is no host-side control flow: the solve traces and
@@ -74,7 +74,12 @@ module Nx = Nx
 
 module Integrator = struct
   module Params = struct
-    type 'a t = { mass : 'a } [@@deriving ptree]
+    type ('a, _) t = { mass : 'a }
+
+    let walk c { mass } =
+      let open Nx.Ptree.Walk in
+      let mass = field c "mass" leaf mass in
+      { mass }
   end
 
   let dt = 0.1
@@ -97,7 +102,9 @@ module Integrator = struct
 
   let final_loss _ ~x = Nx.mul_s (Nx.sum (Nx.mul x x)) 5.0
 
-  let problem : (Nx.float64_elt, Nx.float64_t Params.t) Dilqr.Problem.t =
+  let problem
+    : (Nx.float64_elt, (Nx.host Nx.float64_t, Nx.host) Params.t, Nx.host) Dilqr.Problem.t
+    =
     { dtype = Nx.float64
     ; n
     ; m
@@ -111,9 +118,8 @@ module Integrator = struct
 end
 ```
 
-`[@@deriving ptree]` (from the `ppx_ptree` package, shipped with Raven) turns
-the parameter record into a `Nx.Ptree`, which is what lets `Rune.grad` and
-`Rune.jit` see each parameter as its own leaf.
+`walk` describes the parameter record to `Nx.Ptree`, which is what lets
+`Rune.grad` and `Rune.jit` see each parameter as its own leaf.
 
 ```ocaml
 (* solve.ml *)
@@ -124,13 +130,13 @@ module Nx = Nx
 let vec64 a = Nx.create Nx.float64 [| Array.length a |] a
 let scalar64 v = Nx.scalar Nx.float64 v
 
-let theta : Nx.float64_t Integrator.Params.t = { mass = scalar64 1.0 }
+let theta : (Nx.host Nx.float64_t, Nx.host) Integrator.Params.t = { mass = scalar64 1.0 }
 let x0 = vec64 [| 1.0; 0.0 |]
 
 let us0 =
   Array.init Integrator.horizon ~f:(fun _ -> Nx.create Nx.float64 [| 1 |] [| 0.0 |])
 
-let inputs : (Nx.float64_t Integrator.Params.t, Nx.float64_t) Dilqr.Inputs.t =
+let inputs : ((Nx.host Nx.float64_t, Nx.host) Integrator.Params.t, Nx.host Nx.float64_t) Dilqr.Inputs.t =
   { Dilqr.Inputs.theta; x0; us0 }
 
 (* 1. Adaptive solve. *)
@@ -143,7 +149,7 @@ let () =
 (* 2. Differentiable fixed solve: any scalar loss of the trajectory gets its
    implicit gradient in (theta, x0). *)
 let solve_fixed = Dilqr.solve_fixed Integrator.problem in
-let objective (inputs : (Nx.float64_t Integrator.Params.t, Nx.float64_t) Dilqr.Inputs.t) =
+let objective (inputs : ((Nx.host Nx.float64_t, Nx.host) Integrator.Params.t, Nx.host Nx.float64_t) Dilqr.Inputs.t) =
   Dilqr.loss_of_taus
     Integrator.problem
     inputs.Dilqr.Inputs.theta
@@ -160,22 +166,19 @@ let grads_compiled =
     inputs
 ```
 
-The user code needs `ppx_ptree` preprocessed and the usual libraries:
+The user code needs the usual libraries:
 
 ```dune
 (executable
  (name solve)
- (libraries base stdio nx rune dilqr)
- (preprocess
-  (pps ppx_ptree)))
+ (libraries base stdio nx rune dilqr))
 ```
 
 A few things worth knowing:
 
 - `solve_adaptive` is the adaptive solve with the implicit reverse-mode
   rule. It is eager because the host owns the regularization, line search and
-  convergence logic; pass `~beam` or `~parallel` to compile its tensor
-  kernels. It is unbatched.
+  convergence logic; pass `~jit:true` to compile its tensor kernels. It is unbatched.
 - `solve_fixed` is the fixed-iteration solve. It is traceable: put it inside
   `Rune.jit` for a compiled solve and gradient. It is batched.
 - `Dilqr.Jvp.solve_adaptive` and `Dilqr.Jvp.solve_fixed` are the forward-mode
@@ -194,7 +197,7 @@ Everything lives under `Dilqr`. A problem is a `Dilqr.Problem.t` value, and
 every solver and helper takes it as its first argument.
 
 - **`Dilqr.Problem.t`** — the problem as a value: `dtype`, `n`, `m`,
-  `horizon`, `verbose`, the parameter structure `params : 'p Nx.Ptree.t`, and
+  `horizon`, `verbose`, the parameter structure `params : ('p, 'd) Nx.Ptree.t`, and
   the functions `dynamics`, `running_loss` and `final_loss`. The structure
   is built with `Nx.Ptree.instantiate (module Params)`. Being a record,
   problems can be stored, passed and chosen at runtime.
@@ -204,14 +207,13 @@ every solver and helper takes it as its first argument.
   `Rune.grad`, `Rune.custom_vjp` and `Rune.jit` take. `Dilqr.Inputs.t` is the
   corresponding record.
 
-- **`solve_adaptive problem ?beam ?parallel`** — adaptive iLQR with its
+- **`solve_adaptive problem ?jit`** — adaptive iLQR with its
   implicit reverse-mode derivative. It returns a function taking the adaptive
   options (`?max_iter`, `?conv_threshold`, `?c1`, `?ls_depth`, `?reg`) and the
   solve inputs, and returning the stacked trajectory. Defaults: `max_iter =
   20`, `conv_threshold = 1e-6`, `c1 = 1e-2`, `ls_depth = 8`, seeded
-  regularization `Regularisation.init`. Without `beam` or `parallel` the solve
-  runs eagerly; with either, its tensor kernels are compiled and reused (pass
-  `~parallel:1` or `~beam:0` to compile with the default search settings).
+  regularization `Regularisation.init`. By default the solve runs eagerly;
+  with `~jit:true` its tensor kernels are compiled and reused.
   Unbatched.
 
 - **`solve_fixed problem`** — fixed-iteration iLQR with its implicit
@@ -438,8 +440,7 @@ $ dune runtest                 # or: dune exec ./test/test_dilqr.exe
 ```
 
 The library depends on OCaml `>= 5.5`, dune `>= 3.24`, `base`, `stdio` and the
-Raven libraries `nx` and `rune`; the test suite additionally uses `windtrap`
-and `ppx_ptree`. Both `nx` and `rune` come with Raven, so a suitable opam
+Raven libraries `nx` and `rune`; the test suite additionally uses `windtrap`. Both `nx` and `rune` come with Raven, so a suitable opam
 switch (or an in-tree Raven checkout) is enough.
 
 The test suite covers the regularization schedule, LQR correctness (double

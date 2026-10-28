@@ -10,7 +10,7 @@
     provides:
 
     - solves: {!solve_adaptive} is the classic adaptive iLQR with its
-      implicit reverse-mode derivative. With a JIT option, its tensor kernels
+      implicit reverse-mode derivative. With [~jit:true], its tensor kernels
       — the dynamics and cost scans, the linearization and Riccati pass, and
       one line-search rollout — are compiled by [Rune.jit], while the host
       keeps the regularization retries, backtracking and convergence test.
@@ -73,15 +73,13 @@ module Solver = Solver
     reverse-mode rule; {!module:Jvp} holds the forward-mode forms. *)
 
 (** A differentiable solve: the solve inputs in, the stacked trajectory out. *)
-type ('w, 'p) solve = ('p, 'w Problem.value) Inputs.t -> 'w Problem.value
+type ('w, 'p, 'd) solve = ('p, ('w, 'd) Problem.value) Inputs.t -> ('w, 'd) Problem.value
 
-let solve_adaptive p ?beam ?parallel = Implicit_grad.solve_adaptive_vjp p ?beam ?parallel
+let solve_adaptive p ?jit = Implicit_grad.solve_adaptive_vjp p ?jit
 let solve_fixed p = Implicit_grad.solve_fixed_vjp p
 
 module Jvp = struct
-  let solve_adaptive p ?beam ?parallel =
-    Implicit_grad.solve_adaptive_jvp p ?beam ?parallel
-
+  let solve_adaptive p ?jit = Implicit_grad.solve_adaptive_jvp p ?jit
   let solve_fixed p = Implicit_grad.solve_fixed_jvp p
 end
 

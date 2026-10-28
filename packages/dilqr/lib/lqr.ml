@@ -34,7 +34,7 @@ open Nx
 (* The per-step blocks of one linearization, with the horizon as their leading
    axis: [a] is [[horizon; n; n]], [lx] [[horizon; n]], and so on. *)
 module Rows = struct
-  type 'a t =
+  type ('a, _) t =
     { a : 'a (** ∂f_k/∂x, shape [horizon; n; n] *)
     ; b : 'a (** ∂f_k/∂u, shape [horizon; n; m] *)
     ; lx : 'a (** ∂l_k/∂x, shape [horizon; n] *)
@@ -43,30 +43,40 @@ module Rows = struct
     ; luu : 'a (** ∂²l_k/∂u², shape [horizon; m; m] *)
     ; lux : 'a (** ∂²l_k/∂u∂x, shape [horizon; m; n] *)
     }
-  [@@deriving ptree]
+
+  let walk c { a; b; lx; lu; lxx; luu; lux } =
+    let open Nx.Ptree.Walk in
+    let a = field c "a" leaf a in
+    let b = field c "b" leaf b in
+    let lx = field c "lx" leaf lx in
+    let lu = field c "lu" leaf lu in
+    let lxx = field c "lxx" leaf lxx in
+    let luu = field c "luu" leaf luu in
+    let lux = field c "lux" leaf lux in
+    { a; b; lx; lu; lxx; luu; lux }
 end
 
-type ('a, 'b) tape =
-  { blocks : ('a, 'b) Nx.t Rows.t
-  ; fx : ('a, 'b) Nx.t (** ∂φ/∂x at the final state, shape [n] *)
-  ; fxx : ('a, 'b) Nx.t (** ∂²φ/∂x² at the final state, shape [n; n] *)
+type ('a, 'b, 'd) tape =
+  { blocks : (('a, 'b, 'd) Nx.t, 'd) Rows.t
+  ; fx : ('a, 'b, 'd) Nx.t (** ∂φ/∂x at the final state, shape [n] *)
+  ; fxx : ('a, 'b, 'd) Nx.t (** ∂²φ/∂x² at the final state, shape [n; n] *)
   }
 
-type ('a, 'b) gains =
-  { feedback : ('a, 'b) Nx.t (** K_k, shape [horizon; m; n] *)
-  ; feedforward : ('a, 'b) Nx.t (** k_k, shape [horizon; m] *)
+type ('a, 'b, 'd) gains =
+  { feedback : ('a, 'b, 'd) Nx.t (** K_k, shape [horizon; m; n] *)
+  ; feedforward : ('a, 'b, 'd) Nx.t (** k_k, shape [horizon; m] *)
   }
 
 (** Linear (first-order) cost terms of a Riccati pass. The primal pass uses the
     tape's own gradients; the implicit-gradient pass substitutes cotangent
     slices. *)
-type ('a, 'b) lin =
-  { rlx : ('a, 'b) Nx.t (** [horizon; n] *)
-  ; rlu : ('a, 'b) Nx.t (** [horizon; m] *)
-  ; rfx : ('a, 'b) Nx.t (** [n] *)
+type ('a, 'b, 'd) lin =
+  { rlx : ('a, 'b, 'd) Nx.t (** [horizon; n] *)
+  ; rlu : ('a, 'b, 'd) Nx.t (** [horizon; m] *)
+  ; rfx : ('a, 'b, 'd) Nx.t (** [n] *)
   }
 
-let lin_of_tape (tape : ('a, 'b) tape) : ('a, 'b) lin =
+let lin_of_tape (tape : ('a, 'b, 'd) tape) : ('a, 'b, 'd) lin =
   { rlx = tape.blocks.lx; rlu = tape.blocks.lu; rfx = tape.fx }
 
 (* [flip x] reverses the horizon axis. *)
@@ -74,15 +84,11 @@ let flip x = Nx.flip ~axes:[ 0 ] x
 
 (* [chol_solve ~upper ~rhs] solves [u^T u @ x = rhs] for upper Cholesky factor
    [u]: two triangular substitutions, one per factor. A right-hand side one
-   rank below [upper] is a vector: it is promoted to a [..., n, 1] matrix for
-   the substitution and squeezed back (the traced triangular solve requires
-   matrix right-hand sides). Batched over every leading axis. *)
-let chol_solve ~(upper : ('a, 'b) Nx.t) ~(rhs : ('a, 'b) Nx.t) : ('a, 'b) Nx.t =
-  let vector = Array.length (shape rhs) = Array.length (shape upper) - 1 in
-  let rhs = if vector then unsqueeze ~axes:[ -1 ] rhs else rhs in
-  let z = solve_triangular ~upper:true ~transpose:true ~unit_diag:false upper rhs in
-  let x = solve_triangular ~upper:true ~transpose:false ~unit_diag:false upper z in
-  if vector then squeeze ~axes:[ -1 ] x else x
+   rank below [upper] is a vector. Batched over every leading axis. *)
+let chol_solve ~(upper : ('a, 'b, 'd) Nx.t) ~(rhs : ('a, 'b, 'd) Nx.t) : ('a, 'b, 'd) Nx.t
+  =
+  let z = solve_triangular ~triangle:Upper ~transpose:Transpose upper rhs in
+  solve_triangular ~triangle:Upper upper z
 
 (* [sym x] is the symmetrized part of [x]. *)
 let sym x = Infix.((x + matrix_transpose x) /$ 2.0)
@@ -94,10 +100,10 @@ let matvec m v = squeeze ~axes:[ -1 ] Infix.(m *@ unsqueeze ~axes:[ -1 ] v)
 
 (* The per-step factors that the primal and every tangent of one LQR solve
    share. *)
-type ('a, 'b) common =
-  { quu_chol : ('a, 'b) Nx.t
+type ('a, 'b, 'd) common =
+  { quu_chol : ('a, 'b, 'd) Nx.t
     (** the upper Cholesky factor of the regularized [Q_uu], [horizon; m; m] *)
-  ; feedback : ('a, 'b) Nx.t (** K_k = -Q_uu⁻¹ Q_ux, [horizon; m; n] *)
+  ; feedback : ('a, 'b, 'd) Nx.t (** K_k = -Q_uu⁻¹ Q_ux, [horizon; m; n] *)
   }
 
 (* [regularize ~mu ...] adds Tassa's damping. All three terms are needed for the
@@ -114,7 +120,7 @@ let regularize ~mu ~at ~bt ~a ~b ~quu ~qux ~qxx =
    successor, the regularized [Q_uu] factor, and the feedback gain. A
    regularized [Q_uu] that is not positive definite gives a NaN Cholesky
    factor, and every quantity computed from it is NaN. *)
-let common_step ~mu ~(row : ('a, 'b) Nx.t Rows.t) ~vxx =
+let common_step ~mu ~(row : (('a, 'b, 'd) Nx.t, 'd) Rows.t) ~vxx =
   let a = row.a
   and b = row.b in
   let at = matrix_transpose a
@@ -123,7 +129,7 @@ let common_step ~mu ~(row : ('a, 'b) Nx.t Rows.t) ~vxx =
   let qux = Infix.(row.lux + (bt *@ (vxx *@ a))) in
   let quu = Infix.(row.luu + (bt *@ (vxx *@ b))) in
   let quu, qux, qxx = regularize ~mu ~at ~bt ~a ~b ~quu ~qux ~qxx in
-  let u = cholesky ~upper:true quu in
+  let u = cholesky ~triangle:Upper quu in
   let k_mat = Infix.(-chol_solve ~upper:u ~rhs:qux) in
   let vxx' = sym Infix.(qxx + (matrix_transpose qux *@ k_mat)) in
   u, k_mat, vxx'
@@ -132,7 +138,7 @@ let rows_structure () = Nx.Ptree.instantiate (module Rows)
 
 (* [backward_common ?mu tape] runs the Hessian recursion over the whole horizon
    as one scan, from the last step to the first. *)
-let backward_common ?mu (tape : ('a, 'b) tape) : ('a, 'b) common =
+let backward_common ?mu (tape : ('a, 'b, 'd) tape) : ('a, 'b, 'd) common =
   let rows = rows_structure () in
   let _, (quu_chol, feedback) =
     Rune.scan
@@ -150,7 +156,7 @@ let backward_common ?mu (tape : ('a, 'b) tape) : ('a, 'b) common =
 (* [costate tape] is the primal costate [λ_{k+1}] at every step, [horizon; n]:
    the value gradient of the local model with the tape's own linear terms. One
    scan, and the same tensor for every tangent of the solve. *)
-let costate (tape : ('a, 'b) tape) : ('a, 'b) Nx.t =
+let costate (tape : ('a, 'b, 'd) tape) : ('a, 'b, 'd) Nx.t =
   let _, lam =
     Rune.scan
       Nx.Ptree.tensor
@@ -168,18 +174,27 @@ let costate (tape : ('a, 'b) tape) : ('a, 'b) Nx.t =
 
 (* The per-step outputs of the linear half of the backward pass. *)
 module Lin_rows = struct
-  type 'a t =
+  type ('a, _) t =
     { k : 'a
     ; d1 : 'a
     ; d2 : 'a
     }
-  [@@deriving ptree]
+
+  let walk c { k; d1; d2 } =
+    let open Nx.Ptree.Walk in
+    let k = field c "k" leaf k in
+    let d1 = field c "d1" leaf d1 in
+    let d2 = field c "d2" leaf d2 in
+    { k; d1; d2 }
 end
 
 (* [backward_lin ~common ~tape ~lin] is the linear half of the Riccati pass,
    with the factorization already in hand. *)
-let backward_lin ~(common : ('a, 'b) common) ~(tape : ('a, 'b) tape) ~(lin : ('a, 'b) lin)
-  : ('a, 'b) gains * ('a, 'b) Nx.t * ('a, 'b) Nx.t
+let backward_lin
+      ~(common : ('a, 'b, 'd) common)
+      ~(tape : ('a, 'b, 'd) tape)
+      ~(lin : ('a, 'b, 'd) lin)
+  : ('a, 'b, 'd) gains * ('a, 'b, 'd) Nx.t * ('a, 'b, 'd) Nx.t
   =
   let _, out =
     Rune.scan
@@ -206,29 +221,37 @@ let backward_lin ~(common : ('a, 'b) common) ~(tape : ('a, 'b) tape) ~(lin : ('a
   , sum ~axes:[ 0 ] out.Lin_rows.d2 )
 
 (* [backward ?mu ~tape ~lin] runs the whole Riccati sweep over the horizon. *)
-let backward ?mu (tape : ('a, 'b) tape) ~(lin : ('a, 'b) lin)
-  : ('a, 'b) gains * ('a, 'b) Nx.t * ('a, 'b) Nx.t
+let backward ?mu (tape : ('a, 'b, 'd) tape) ~(lin : ('a, 'b, 'd) lin)
+  : ('a, 'b, 'd) gains * ('a, 'b, 'd) Nx.t * ('a, 'b, 'd) Nx.t
   =
   let common = backward_common ?mu tape in
   backward_lin ~common ~tape ~lin
 
 (* A solution trajectory, as one tensor per trajectory. *)
-type ('a, 'b) solution =
-  { xs : ('a, 'b) Nx.t (** [horizon + 1; n] *)
-  ; us : ('a, 'b) Nx.t (** [horizon; m] *)
+type ('a, 'b, 'd) solution =
+  { xs : ('a, 'b, 'd) Nx.t (** [horizon + 1; n] *)
+  ; us : ('a, 'b, 'd) Nx.t (** [horizon; m] *)
   }
 
 (* The rows of one step of a gain rollout: the nominal state and control, the
    step index, and the gains. *)
 module Roll_rows = struct
-  type 'a t =
+  type ('a, _) t =
     { x : 'a
     ; u : 'a
     ; k : 'a
     ; ff : 'a
     ; fb : 'a
     }
-  [@@deriving ptree]
+
+  let walk c { x; u; k; ff; fb } =
+    let open Nx.Ptree.Walk in
+    let x = field c "x" leaf x in
+    let u = field c "u" leaf u in
+    let k = field c "k" leaf k in
+    let ff = field c "ff" leaf ff in
+    let fb = field c "fb" leaf fb in
+    { x; u; k; ff; fb }
 end
 
 (* [rollout_tensor ~dyn ~x0 ~xs ~us ~gains ~alpha] integrates the true
@@ -238,17 +261,21 @@ end
    batch axes between the horizon and the dimensions, and [alpha] is a scalar
    tensor so that a traced line search can pass the step size as an argument. *)
 let rollout_tensor
-      ~(dyn : k:('a, 'b) Nx.t -> ('a, 'b) Nx.t -> ('a, 'b) Nx.t -> ('a, 'b) Nx.t)
-      ~(x0 : ('a, 'b) Nx.t)
-      ~(xs : ('a, 'b) Nx.t)
-      ~(us : ('a, 'b) Nx.t)
-      ~(gains : ('a, 'b) gains)
-      ~(alpha : ('a, 'b) Nx.t)
-  : ('a, 'b) Nx.t * ('a, 'b) Nx.t
+      ~(dyn :
+         k:('a, 'b, 'd) Nx.t
+         -> ('a, 'b, 'd) Nx.t
+         -> ('a, 'b, 'd) Nx.t
+         -> ('a, 'b, 'd) Nx.t)
+      ~(x0 : ('a, 'b, 'd) Nx.t)
+      ~(xs : ('a, 'b, 'd) Nx.t)
+      ~(us : ('a, 'b, 'd) Nx.t)
+      ~(gains : ('a, 'b, 'd) gains)
+      ~(alpha : ('a, 'b, 'd) Nx.t)
+  : ('a, 'b, 'd) Nx.t * ('a, 'b, 'd) Nx.t
   =
   let roll_rows = Nx.Ptree.instantiate (module Roll_rows) in
   let horizon = (shape us).(0) in
-  let k = arange (Nx.dtype x0) 0 horizon 1 in
+  let k = arange_at (placement x0) (Nx.dtype x0) 0 horizon 1 in
   let rows =
     { Roll_rows.x = slice [ R (0, horizon) ] xs
     ; u = us
@@ -281,10 +308,10 @@ let rollout ~dyn ~x0 ~xs ~us ~gains ~alpha =
    δx_{k+1} = A δx_k + B δu_k with δu_k = k_k + K_k δx_k from δx_0 = [x0], as
    one scan. Used by the implicit gradient's perturbation solve. *)
 let rollout_linearized
-      ~(tape : ('a, 'b) tape)
-      ~(gains : ('a, 'b) gains)
-      ~(x0 : ('a, 'b) Nx.t)
-  : ('a, 'b) Nx.t * ('a, 'b) Nx.t
+      ~(tape : ('a, 'b, 'd) tape)
+      ~(gains : ('a, 'b, 'd) gains)
+      ~(x0 : ('a, 'b, 'd) Nx.t)
+  : ('a, 'b, 'd) Nx.t * ('a, 'b, 'd) Nx.t
   =
   let _, (du, dx_next) =
     Rune.scan
@@ -303,27 +330,28 @@ let rollout_linearized
 (* [solve ?mu ~tape ~x0] is the solution of the quadratic problem: the Riccati
    backward pass, then the gain rollout from [x0] under the linearized
    dynamics. *)
-let solve ?mu (tape : ('a, 'b) tape) ~(x0 : ('a, 'b) Nx.t) : ('a, 'b) solution =
+let solve ?mu (tape : ('a, 'b, 'd) tape) ~(x0 : ('a, 'b, 'd) Nx.t) : ('a, 'b, 'd) solution
+  =
   let common = backward_common ?mu tape in
   let gains, _, _ = backward_lin ~common ~tape ~lin:(lin_of_tape tape) in
   let xs, us = rollout_linearized ~tape ~gains ~x0 in
   { xs; us }
 
 (** The tangent of a tape's first-order data: what {!solve_jvp} consumes. *)
-type ('a, 'b) tangent =
-  { da : ('a, 'b) Nx.t (** ∂A_k along the tangent, shape [horizon; n; n] *)
-  ; db : ('a, 'b) Nx.t (** ∂B_k, shape [horizon; n; m] *)
-  ; df : ('a, 'b) Nx.t
+type ('a, 'b, 'd) tangent =
+  { da : ('a, 'b, 'd) Nx.t (** ∂A_k along the tangent, shape [horizon; n; n] *)
+  ; db : ('a, 'b, 'd) Nx.t (** ∂B_k, shape [horizon; n; m] *)
+  ; df : ('a, 'b, 'd) Nx.t
     (** ∂f_k, the tangent of the dynamics' value at the nominal step,
         shape [horizon; n] *)
-  ; dlx : ('a, 'b) Nx.t (** ∂(∂l_k/∂x), shape [horizon; n] *)
-  ; dlu : ('a, 'b) Nx.t (** ∂(∂l_k/∂u), shape [horizon; m] *)
-  ; dfx : ('a, 'b) Nx.t (** ∂(∂φ/∂x) at the final state, shape [n] *)
+  ; dlx : ('a, 'b, 'd) Nx.t (** ∂(∂l_k/∂x), shape [horizon; n] *)
+  ; dlu : ('a, 'b, 'd) Nx.t (** ∂(∂l_k/∂u), shape [horizon; m] *)
+  ; dfx : ('a, 'b, 'd) Nx.t (** ∂(∂φ/∂x) at the final state, shape [n] *)
   }
 
 (* The per-step inputs of the tangent backward pass. *)
 module Tangent_rows = struct
-  type 'a t =
+  type ('a, _) t =
     { a : 'a
     ; b : 'a
     ; da : 'a
@@ -336,24 +364,48 @@ module Tangent_rows = struct
     ; g : 'a
     ; fb : 'a
     }
-  [@@deriving ptree]
+
+  let walk c { a; b; da; db; lxx; lux; lx; dlx; dlu; g; fb } =
+    let open Nx.Ptree.Walk in
+    let a = field c "a" leaf a in
+    let b = field c "b" leaf b in
+    let da = field c "da" leaf da in
+    let db = field c "db" leaf db in
+    let lxx = field c "lxx" leaf lxx in
+    let lux = field c "lux" leaf lux in
+    let lx = field c "lx" leaf lx in
+    let dlx = field c "dlx" leaf dlx in
+    let dlu = field c "dlu" leaf dlu in
+    let g = field c "g" leaf g in
+    let fb = field c "fb" leaf fb in
+    { a; b; da; db; lxx; lux; lx; dlx; dlu; g; fb }
 end
 
 (* The per-step inputs of the tangent feedforward rollout. *)
 module Tangent_roll_rows = struct
-  type 'a t =
+  type ('a, _) t =
     { a : 'a
     ; b : 'a
     ; chol : 'a
     ; fb : 'a
     ; q : 'a
     }
-  [@@deriving ptree]
+
+  let walk c { a; b; chol; fb; q } =
+    let open Nx.Ptree.Walk in
+    let a = field c "a" leaf a in
+    let b = field c "b" leaf b in
+    let chol = field c "chol" leaf chol in
+    let fb = field c "fb" leaf fb in
+    let q = field c "q" leaf q in
+    { a; b; chol; fb; q }
 end
 
 (* One step of the tangent backward pass: the tangent feedforward [q] from the
    per-step inputs [row] and the incoming [e], and the next [e]. *)
-let tangent_step ~e (row : ('a, 'b) Nx.t Tangent_rows.t) : ('a, 'b) Nx.t * ('a, 'b) Nx.t =
+let tangent_step ~e (row : (('a, 'b, 'd) Nx.t, 'd) Tangent_rows.t)
+  : ('a, 'b, 'd) Nx.t * ('a, 'b, 'd) Nx.t
+  =
   let open Infix in
   let x = row.dlx + (matvec (matrix_transpose row.da) row.lx + matvec row.lxx row.g) in
   let u = row.dlu + (matvec (matrix_transpose row.db) row.lx + matvec row.lux row.g) in
@@ -363,8 +415,8 @@ let tangent_step ~e (row : ('a, 'b) Nx.t Tangent_rows.t) : ('a, 'b) Nx.t * ('a, 
 
 (* One step of the tangent gain rollout: the tangent control from the per-step
    inputs [row] and the incoming [v], and the next [v]. *)
-let tangent_roll_step ~v (row : ('a, 'b) Nx.t Tangent_roll_rows.t)
-  : ('a, 'b) Nx.t * ('a, 'b) Nx.t
+let tangent_roll_step ~v (row : (('a, 'b, 'd) Nx.t, 'd) Tangent_roll_rows.t)
+  : ('a, 'b, 'd) Nx.t * ('a, 'b, 'd) Nx.t
   =
   let open Infix in
   let du = -chol_solve ~upper:row.chol ~rhs:row.q + matvec row.fb v in
@@ -382,12 +434,12 @@ let tangent_roll_step ~v (row : ('a, 'b) Nx.t Tangent_roll_rows.t)
    the primal Hessians acting on [G];
    3. a forward rollout of the tangent control law against the shared factor. *)
 let solve_jvp
-      ~(common : ('a, 'b) common)
-      ~(tape : ('a, 'b) tape)
-      ~(costate : ('a, 'b) Nx.t)
-      ~(tangent : ('a, 'b) tangent)
-      ~(dx0 : ('a, 'b) Nx.t)
-  : ('a, 'b) solution
+      ~(common : ('a, 'b, 'd) common)
+      ~(tape : ('a, 'b, 'd) tape)
+      ~(costate : ('a, 'b, 'd) Nx.t)
+      ~(tangent : ('a, 'b, 'd) tangent)
+      ~(dx0 : ('a, 'b, 'd) Nx.t)
+  : ('a, 'b, 'd) solution
   =
   let horizon = (shape tape.blocks.a).(0) in
   (* 1. The tangent trajectory. *)

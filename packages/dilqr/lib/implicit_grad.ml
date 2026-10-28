@@ -42,7 +42,9 @@ type ('p, 'a) residual =
 
 (* [taus_of_stacked p xs us] is [Problem.taus_of] at stacked tensors: what a
    forward-mode solve returns. *)
-let taus_of_stacked p (xs : 'w Problem.value) (us : 'w Problem.value) : 'w Problem.value =
+let taus_of_stacked p (xs : ('w, 'd) Problem.value) (us : ('w, 'd) Problem.value)
+  : ('w, 'd) Problem.value
+  =
   let horizon = p.Problem.horizon in
   let last =
     concatenate ~axis:(-1) [ slice [ I horizon ] xs; zeros_like (slice [ I 0 ] us) ]
@@ -57,19 +59,19 @@ let outer a b = Infix.(unsqueeze ~axes:[ -1 ] a *@ unsqueeze ~axes:[ -2 ] b)
 let matvec m v = squeeze ~axes:[ -1 ] Infix.(m *@ unsqueeze ~axes:[ -1 ] v)
 
 (* [row t k] is the k-th step of a stacked tensor. *)
-let row (t : ('a, 'b) Nx.t) k = slice [ I k ] t
+let row (t : ('a, 'b, 'd) Nx.t) k = slice [ I k ] t
 
 (* [flip x] reverses the horizon axis. *)
 let flip x = Nx.flip ~axes:[ 0 ] x
 
 (* [stack_array ts] stacks the steps of [ts] along a new leading axis. *)
-let stack_array (ts : ('a, 'b) Nx.t array) : ('a, 'b) Nx.t =
+let stack_array (ts : ('a, 'b, 'd) Nx.t array) : ('a, 'b, 'd) Nx.t =
   stack ~axis:0 (Array.to_list ts)
 
 (* The implicit VJP. [ybar] is the cotangent on the stacked trajectory; the
    result holds cotangents on (theta, x0, us0). *)
-let bwd p (res : ('p, 'w Problem.value) residual) (ybar : 'w Problem.value)
-  : ('p, 'w Problem.value) Problem.Inputs.t
+let bwd p (res : ('p, ('w, 'd) Problem.value) residual) (ybar : ('w, 'd) Problem.value)
+  : ('p, ('w, 'd) Problem.value) Problem.Inputs.t
   =
   let { theta; x0 = _; us0 = _; xs; us } = res in
   let horizon = p.Problem.horizon
@@ -88,7 +90,9 @@ let bwd p (res : ('p, 'w Problem.value) residual) (ybar : 'w Problem.value)
     { Lqr.rlx =
         concatenate
           ~axis:0
-          [ zeros p.Problem.dtype [| 1; n |]; slice [ R (1, horizon); R (0, n) ] ybar ]
+          [ zeros_at (placement ybar) p.Problem.dtype [| 1; n |]
+          ; slice [ R (1, horizon); R (0, n) ] ybar
+          ]
     ; rlu = slice [ R (0, horizon); R (n, n + m) ] ybar
     ; rfx = yx horizon
     }
@@ -141,7 +145,7 @@ let bwd p (res : ('p, 'w Problem.value) residual) (ybar : 'w Problem.value)
   (* Step 3: chain the block cotangents to θ with a nested grad over a
      scalar surrogate that recomputes the blocks from θ exactly like the
      forward pass, so derived quantities (a_k, c_k) propagate couplings. *)
-  let ks = arange p.Problem.dtype 0 horizon 1 in
+  let ks = arange_at (placement xs_t) p.Problem.dtype 0 horizon 1 in
   let grad_theta =
     Rune.grad
       p.Problem.params
@@ -193,36 +197,45 @@ let bwd p (res : ('p, 'w Problem.value) residual) (ybar : 'w Problem.value)
   ; us0 = Array.map ~f:zeros_like res.us0
   }
 
-(* [adaptive_solver p ?beam ?parallel] is the adaptive solve. Supplying a
-   [Rune.jit] search option asks for the compiled kernels; without one the
-   solve runs eagerly, as it did before the differentiable entry point grew
-   its JIT options. The host keeps the control flow either way. *)
-let adaptive_solver p ?beam ?parallel =
-  match beam, parallel with
-  | None, None -> Solver.solve p
-  | _ -> Solver.compile ?beam ?parallel p
+(* [adaptive_solver ~jit p] is the adaptive solve, its tensor kernels
+   compiled under [~jit:true] and eager otherwise. The host keeps the control
+   flow either way. *)
+let adaptive_solver ?(jit = false) p = if jit then Solver.compile p else Solver.solve p
+
+(* [adaptive_primal p solve inputs] is the adaptive solve's solution and its
+   stacked trajectory. The solve reads scalars on the host, which a custom
+   rule, traced at its call, cannot: it runs here, on the inputs' values with
+   no derivative, and the rule attaches the implicit derivative at the
+   solution it found. *)
+let adaptive_primal p solve ?max_iter ?conv_threshold ?c1 ?ls_depth ?reg inputs =
+  let { Problem.Inputs.theta; x0; us0 } =
+    Nx.Ptree.map (Problem.inputs p) (fun _ x -> Rune.detach x) inputs
+  in
+  let sol = solve ?max_iter ?conv_threshold ?c1 ?ls_depth ?reg theta x0 us0 in
+  sol, taus_of_stacked p (Solver.stack sol.Solver.xs) (Solver.stack sol.us)
 
 (* The adaptive solve with its implicit reverse-mode rule. The returned
    closure owns the eager or compiled kernels once per problem, so it can serve
    many solves and many regularization or line-search settings without
    retracing. The primal still reads scalars on the host for its convergence
    and line-search control flow, so the closure is eager. *)
-let solve_adaptive_vjp (p : ('w, 'p) Problem.t) ?beam ?parallel =
-  let solve = adaptive_solver p ?beam ?parallel in
+let solve_adaptive_vjp (p : ('w, 'p, 'd) Problem.t) ?jit =
+  let solve = adaptive_solver ?jit p in
   fun ?max_iter
     ?conv_threshold
     ?c1
     ?ls_depth
     ?reg
-    (inputs : ('p, 'w Problem.value) Problem.Inputs.t)
-    : 'w Problem.value ->
+    (inputs : ('p, ('w, 'd) Problem.value) Problem.Inputs.t)
+    : ('w, 'd) Problem.value ->
+    let sol, taus =
+      adaptive_primal p solve ?max_iter ?conv_threshold ?c1 ?ls_depth ?reg inputs
+    in
     Rune.custom_vjp
       (Problem.inputs p)
       Nx.Ptree.tensor
       (fun { Problem.Inputs.theta; x0; us0 } ->
-         let sol = solve ?max_iter ?conv_threshold ?c1 ?ls_depth ?reg theta x0 us0 in
-         ( taus_of_stacked p (Solver.stack sol.xs) (Solver.stack sol.us)
-         , fun ybar -> bwd p { theta; x0; us0; xs = sol.xs; us = sol.us } ybar ))
+         taus, fun ybar -> bwd p { theta; x0; us0; xs = sol.xs; us = sol.us } ybar)
       inputs
 
 (* The traceable fixed-iteration solve with its implicit reverse-mode rule.
@@ -234,8 +247,8 @@ let solve_fixed_vjp_unbatched
       ?alphas
       ?mu
       ?c1
-      (inputs : ('p, 'w Problem.value) Problem.Inputs.t)
-  : 'w Problem.value
+      (inputs : ('p, ('w, 'd) Problem.value) Problem.Inputs.t)
+  : ('w, 'd) Problem.value
   =
   Rune.custom_vjp
     (Problem.inputs p)
@@ -267,29 +280,31 @@ let solve_fixed_vjp p ?alphas ?mu ?c1 ~iters inputs =
    streaming tangent solve. The factors and the tape are computed here, in the
    map, so that a solve whose derivative nobody asks for does not pay for them —
    the same bargain the VJP's pullback makes. *)
-let tangent_of_solve p ~theta ~(sol : 'w Problem.value Solver.t) ~dx0 ~dtheta
-  : 'w Problem.value
+let tangent_of_solve p ~theta ~(sol : ('w, 'd) Problem.value Solver.t) ~dx0 ~dtheta
+  : ('w, 'd) Problem.value
   =
   let dsol = Solver.tangent_solve p theta ~dtheta ~dx0 sol.xs sol.us in
   taus_of_stacked p dsol.Lqr.xs dsol.Lqr.us
 
 (* The adaptive solve with its implicit forward-mode rule. The primal is the
    same closure as the reverse-mode entry point. *)
-let solve_adaptive_jvp (p : ('w, 'p) Problem.t) ?beam ?parallel =
-  let solve = adaptive_solver p ?beam ?parallel in
+let solve_adaptive_jvp (p : ('w, 'p, 'd) Problem.t) ?jit =
+  let solve = adaptive_solver ?jit p in
   fun ?max_iter
     ?conv_threshold
     ?c1
     ?ls_depth
     ?reg
-    (inputs : ('p, 'w Problem.value) Problem.Inputs.t)
-    : 'w Problem.value ->
+    (inputs : ('p, ('w, 'd) Problem.value) Problem.Inputs.t)
+    : ('w, 'd) Problem.value ->
+    let sol, taus =
+      adaptive_primal p solve ?max_iter ?conv_threshold ?c1 ?ls_depth ?reg inputs
+    in
     Rune.custom_jvp
       (Problem.inputs p)
       Nx.Ptree.tensor
-      (fun { Problem.Inputs.theta; x0; us0 } ->
-         let sol = solve ?max_iter ?conv_threshold ?c1 ?ls_depth ?reg theta x0 us0 in
-         ( taus_of_stacked p (Solver.stack sol.xs) (Solver.stack sol.us)
+      (fun { Problem.Inputs.theta; x0 = _; us0 = _ } ->
+         ( taus
          , fun { Problem.Inputs.theta = dtheta; x0 = dx0; us0 = _ } ->
              tangent_of_solve p ~theta ~sol ~dx0 ~dtheta ))
       inputs
@@ -301,8 +316,8 @@ let solve_fixed_jvp_unbatched
       ?alphas
       ?mu
       ?c1
-      (inputs : ('p, 'w Problem.value) Problem.Inputs.t)
-  : 'w Problem.value
+      (inputs : ('p, ('w, 'd) Problem.value) Problem.Inputs.t)
+  : ('w, 'd) Problem.value
   =
   Rune.custom_jvp
     (Problem.inputs p)

@@ -40,7 +40,7 @@ let check_close ~msg ~tol got expected =
 
 (* Central finite difference of a scalar function of a [k]-dim float64
    vector. *)
-let fd_grad ~eps f (x : Nx.float64_t) : Nx.float64_t =
+let fd_grad ~eps f (x : host float64_t) : host float64_t =
   let n = (shape x).(0) in
   let out = Array.create ~len:n 0.0 in
   for i = 0 to n - 1 do
@@ -55,7 +55,7 @@ let vec64 a = create float64 [| Array.length a |] a
 let scalar64 v = scalar float64 v
 let item t = Nx.item [] t
 
-let us_of (vs : float list list) : Nx.float64_t array =
+let us_of (vs : float list list) : host float64_t array =
   Array.of_list (List.map ~f:(fun l -> vec64 (Array.of_list l)) vs)
 
 (* ──────────────────────────────────────────────────────────────────────────
@@ -66,7 +66,12 @@ let us_of (vs : float list list) : Nx.float64_t array =
 (* Double integrator: x = [position; velocity], control = force. *)
 module Integrator = struct
   module Params = struct
-    type 'a t = { mass : 'a } [@@deriving ptree]
+    type ('a, _) t = { mass : 'a }
+
+    let walk c { mass } =
+      let open Nx.Ptree.Walk in
+      let mass = field c "mass" leaf mass in
+      { mass }
   end
 
   let n = 2
@@ -96,7 +101,7 @@ module Integrator = struct
     and vel = slice [ R (1, 2) ] x in
     sum ((pos * pos) + (vel * vel)) *$ 5.0
 
-  let problem : (Nx.float64_elt, Nx.float64_t Params.t) Dilqr.Problem.t =
+  let problem : (float64_elt, (host float64_t, host) Params.t, host) Dilqr.Problem.t =
     { dtype = float64
     ; n
     ; m
@@ -113,12 +118,18 @@ end
    coefficient 0.1. Regulate the upright position (angle = π). *)
 module Pendulum = struct
   module Params = struct
-    type 'a t =
+    type ('a, _) t =
       { gravity : 'a
       ; mass : 'a
       ; length : 'a
       }
-    [@@deriving ptree]
+
+    let walk c { gravity; mass; length } =
+      let open Nx.Ptree.Walk in
+      let gravity = field c "gravity" leaf gravity in
+      let mass = field c "mass" leaf mass in
+      let length = field c "length" leaf length in
+      { gravity; mass; length }
   end
 
   let n = 2
@@ -150,7 +161,7 @@ module Pendulum = struct
     let dtheta = theta -$ target in
     sum ((dtheta * dtheta) + (omega * omega)) *$ 5.0
 
-  let problem : (Nx.float64_elt, Nx.float64_t Params.t) Dilqr.Problem.t =
+  let problem : (float64_elt, (host float64_t, host) Params.t, host) Dilqr.Problem.t =
     { dtype = float64
     ; n
     ; m
@@ -169,11 +180,16 @@ end
    and the unbatched solve. *)
 module Batched = struct
   module Params = struct
-    type 'a t =
+    type ('a, _) t =
       { mass : 'a
       ; target : 'a
       }
-    [@@deriving ptree]
+
+    let walk c { mass; target } =
+      let open Nx.Ptree.Walk in
+      let mass = field c "mass" leaf mass in
+      let target = field c "target" leaf target in
+      { mass; target }
   end
 
   let n = 2
@@ -202,7 +218,7 @@ module Batched = struct
     let err = pos - target in
     sum ((err * err) + (vel * vel)) *$ 5.0
 
-  let problem : (Nx.float64_elt, Nx.float64_t Params.t) Dilqr.Problem.t =
+  let problem : (float64_elt, (host float64_t, host) Params.t, host) Dilqr.Problem.t =
     { dtype = float64
     ; n
     ; m
@@ -218,7 +234,7 @@ end
 (* A deterministic pseudo-random pattern of the same shape as [like]: a fixed
    float64 wave folded into the shape and cast to the leaf's dtype. Test inputs
    only — no generator, so a failing case reproduces. *)
-let pattern ~seed ~(like : ('a, 'b) Nx.t) : ('a, 'b) Nx.t =
+let pattern ~seed ~(like : ('a, 'b, host) Nx.t) : ('a, 'b, host) Nx.t =
   let s = shape like in
   let numel = Array.fold s ~init:1 ~f:(fun a b -> a * b) in
   let flat = arange_f float64 0.0 (Float.of_int numel) 1.0 in
@@ -226,11 +242,11 @@ let pattern ~seed ~(like : ('a, 'b) Nx.t) : ('a, 'b) Nx.t =
   Nx.cast (Nx.dtype like) (reshape s wave)
 
 (* The same, one leaf at a time: a tangent seed, or a cotangent on the inputs. *)
-let pattern_inputs ~seed (structure : 'p Nx.Ptree.t) (value : 'p) : 'p =
+let pattern_inputs ~seed (structure : ('p, host) Nx.Ptree.t) (value : 'p) : 'p =
   Nx.Ptree.map structure (fun _ leaf -> pattern ~seed ~like:leaf) value
 
 (* The same with [k] leading lanes: a batch of directions. *)
-let pattern_lanes ~seed ~k (structure : 'p Nx.Ptree.t) (value : 'p) : 'p =
+let pattern_lanes ~seed ~k (structure : ('p, host) Nx.Ptree.t) (value : 'p) : 'p =
   Nx.Ptree.map
     structure
     (fun _ leaf ->
@@ -315,7 +331,7 @@ let test_costate () =
    rollout — independent of the Riccati code under test. *)
 let test_integrator_converges () =
   let module P = Integrator in
-  let theta : Nx.float64_t P.Params.t = { mass = scalar64 1.0 } in
+  let theta : (host float64_t, host) P.Params.t = { mass = scalar64 1.0 } in
   let x0 = vec64 [| 1.0; 0.0 |] in
   let us0 = us_of (List.init P.horizon ~f:(fun _ -> [ 0.0 ])) in
   let cost_of_us us = snd (Dilqr.Solver.rollout P.problem theta x0 us) in
@@ -339,7 +355,7 @@ let test_integrator_converges () =
 
 let test_pendulum_converges () =
   let module P = Pendulum in
-  let theta : Nx.float64_t P.Params.t =
+  let theta : (host float64_t, host) P.Params.t =
     { gravity = scalar64 9.81; mass = scalar64 1.0; length = scalar64 1.0 }
   in
   let x0 = vec64 [| P.target -. 0.3; 0.0 |] in
@@ -356,12 +372,12 @@ let test_pendulum_converges () =
    the pendulum with a tightly converged solve. *)
 let test_implicit_gradient_matches_fd () =
   let module P = Pendulum in
-  let theta : Nx.float64_t P.Params.t =
+  let theta : (host float64_t, host) P.Params.t =
     { gravity = scalar64 9.81; mass = scalar64 1.3; length = scalar64 0.9 }
   in
   let x0 = vec64 [| P.target -. 0.4; 0.1 |] in
   let us0 = us_of (List.init P.horizon ~f:(fun _ -> [ 0.02 ])) in
-  let inputs : (Nx.float64_t P.Params.t, Nx.float64_t) Dilqr.Inputs.t =
+  let inputs : ((host float64_t, host) P.Params.t, host float64_t) Dilqr.Inputs.t =
     { Dilqr.Inputs.theta; x0; us0 }
   in
   (* A user loss on the solve output, different from the problem's own cost. *)
@@ -420,7 +436,7 @@ let test_implicit_gradient_matches_fd () =
    one. *)
 let test_fixed_solve_works () =
   let module P = Integrator in
-  let theta : Nx.float64_t P.Params.t = { mass = scalar64 1.0 } in
+  let theta : (host float64_t, host) P.Params.t = { mass = scalar64 1.0 } in
   let x0 = vec64 [| 1.0; 0.0 |] in
   let us0 = us_of (List.init P.horizon ~f:(fun _ -> [ 0.0 ])) in
   let sol = Dilqr.Solver.solve_fixed P.problem ~iters:8 theta x0 us0 in
@@ -435,7 +451,7 @@ let test_fixed_solve_works () =
    fallback trial. *)
 let test_fixed_all_rejected () =
   let module P = Integrator in
-  let theta : Nx.float64_t P.Params.t = { mass = scalar64 1.0 } in
+  let theta : (host float64_t, host) P.Params.t = { mass = scalar64 1.0 } in
   let x0 = vec64 [| 1.0; 0.0 |] in
   let us0 = us_of (List.init P.horizon ~f:(fun _ -> [ 0.0 ])) in
   let sol =
@@ -450,10 +466,10 @@ let test_fixed_all_rejected () =
 (* JIT: the compiled fixed solve equals the eager one. *)
 let test_jit_solve () =
   let module P = Integrator in
-  let theta : Nx.float64_t P.Params.t = { mass = scalar64 1.0 } in
+  let theta : (host float64_t, host) P.Params.t = { mass = scalar64 1.0 } in
   let x0 = vec64 [| 1.0; 0.0 |] in
   let us0 = us_of (List.init P.horizon ~f:(fun _ -> [ 0.0 ])) in
-  let inputs : (Nx.float64_t P.Params.t, Nx.float64_t) Dilqr.Inputs.t =
+  let inputs : ((host float64_t, host) P.Params.t, host float64_t) Dilqr.Inputs.t =
     { Dilqr.Inputs.theta; x0; us0 }
   in
   let eager = Dilqr.solve_fixed P.problem ~iters:5 inputs in
@@ -469,10 +485,10 @@ let test_jit_solve () =
    matches the eager gradient. *)
 let test_jit_grad () =
   let module P = Integrator in
-  let theta : Nx.float64_t P.Params.t = { mass = scalar64 1.0 } in
+  let theta : (host float64_t, host) P.Params.t = { mass = scalar64 1.0 } in
   let x0 = vec64 [| 1.0; 0.0 |] in
   let us0 = us_of (List.init P.horizon ~f:(fun _ -> [ 0.0 ])) in
-  let inputs : (Nx.float64_t P.Params.t, Nx.float64_t) Dilqr.Inputs.t =
+  let inputs : ((host float64_t, host) P.Params.t, host float64_t) Dilqr.Inputs.t =
     { Dilqr.Inputs.theta; x0; us0 }
   in
   let loss taus =
@@ -506,7 +522,7 @@ let test_jit_grad () =
 let batched_setup () =
   let module P = Batched in
   let b = 3 in
-  let theta : Nx.float64_t P.Params.t =
+  let theta : (host float64_t, host) P.Params.t =
     { mass = create float64 [| b |] [| 1.0; 1.0; 1.0 |]
     ; target = create float64 [| b; 1 |] [| 1.0; -0.5; 0.8 |]
     }
@@ -516,8 +532,8 @@ let batched_setup () =
   b, theta, x0, us0
 
 (* Member [i]'s slice of a batched setup. *)
-let batched_member (theta : Nx.float64_t Batched.Params.t) x0 us0 i =
-  let theta_i : Nx.float64_t Batched.Params.t =
+let batched_member (theta : (host float64_t, host) Batched.Params.t) x0 us0 i =
+  let theta_i : (host float64_t, host) Batched.Params.t =
     { mass = slice [ I i ] theta.Batched.Params.mass
     ; target = slice [ I i ] theta.Batched.Params.target
     }
@@ -542,7 +558,7 @@ let test_batched_fixed_solve () =
   let xs, us = Dilqr.split_taus P.problem taus in
   (* the trajectory helpers are batched too *)
   let xs_b, cost_b = Dilqr.Solver.rollout P.problem theta x0 us0 in
-  let tape_b : (float, Nx.float64_elt) Dilqr.Lqr.tape =
+  let tape_b : (float, float64_elt, host) Dilqr.Lqr.tape =
     Dilqr.Solver.blocks P.problem theta sol.xs sol.us
   in
   for i = 0 to b - 1 do
@@ -601,7 +617,7 @@ let test_batched_fixed_solve () =
 let test_batched_grad () =
   let module P = Batched in
   let b, theta, x0, us0 = batched_setup () in
-  let inputs : (Nx.float64_t P.Params.t, Nx.float64_t) Dilqr.Inputs.t =
+  let inputs : ((host float64_t, host) P.Params.t, host float64_t) Dilqr.Inputs.t =
     { Dilqr.Inputs.theta; x0; us0 }
   in
   let objective i =
@@ -614,7 +630,7 @@ let test_batched_grad () =
   let g = Rune.grad (Dilqr.inputs P.problem) objective inputs in
   for i = 0 to b - 1 do
     let theta_i, x0_i, us0_i = batched_member theta x0 us0 i in
-    let inputs_i : (Nx.float64_t P.Params.t, Nx.float64_t) Dilqr.Inputs.t =
+    let inputs_i : ((host float64_t, host) P.Params.t, host float64_t) Dilqr.Inputs.t =
       { Dilqr.Inputs.theta = theta_i; x0 = x0_i; us0 = us0_i }
     in
     let g_i = Rune.grad (Dilqr.inputs P.problem) objective inputs_i in
@@ -656,9 +672,9 @@ let test_batched_grad () =
    function once and reuse it for a second initial state of the same shapes. *)
 let test_compiled_adaptive_solve () =
   let module P = Integrator in
-  let theta : Nx.float64_t P.Params.t = { mass = scalar64 1.0 } in
+  let theta : (host float64_t, host) P.Params.t = { mass = scalar64 1.0 } in
   let us0 = us_of (List.init P.horizon ~f:(fun _ -> [ 0.0 ])) in
-  let solve = Dilqr.Solver.compile P.problem ~beam:0 ~parallel:1 in
+  let solve = Dilqr.Solver.compile P.problem in
   let check ~msg x0 =
     let eager = Dilqr.Solver.solve P.problem ~max_iter:20 theta x0 us0 in
     let compiled = solve ~max_iter:20 theta x0 us0 in
@@ -675,15 +691,13 @@ let test_compiled_adaptive_solve () =
    retries and a backtracked step. *)
 let test_compiled_adaptive_pendulum () =
   let module P = Pendulum in
-  let theta : Nx.float64_t P.Params.t =
+  let theta : (host float64_t, host) P.Params.t =
     { gravity = scalar64 9.81; mass = scalar64 1.0; length = scalar64 1.0 }
   in
   let x0 = vec64 [| P.target -. 0.3; 0.0 |] in
   let us0 = us_of (List.init P.horizon ~f:(fun _ -> [ 0.0 ])) in
   let eager = Dilqr.Solver.solve P.problem ~max_iter:20 theta x0 us0 in
-  let compiled =
-    (Dilqr.Solver.compile P.problem ~beam:0 ~parallel:1) ~max_iter:20 theta x0 us0
-  in
+  let compiled = (Dilqr.Solver.compile P.problem) ~max_iter:20 theta x0 us0 in
   check_close ~msg:"compiled pendulum cost" ~tol:1e-9 compiled.cost eager.cost;
   Array.iteri eager.us ~f:(fun k u ->
     check_close
@@ -697,14 +711,14 @@ let test_compiled_adaptive_pendulum () =
    trajectory. *)
 let test_solve_adaptive_compiled () =
   let module P = Integrator in
-  let theta : Nx.float64_t P.Params.t = { mass = scalar64 1.0 } in
+  let theta : (host float64_t, host) P.Params.t = { mass = scalar64 1.0 } in
   let x0 = vec64 [| 1.0; 0.0 |] in
   let us0 = us_of (List.init P.horizon ~f:(fun _ -> [ 0.0 ])) in
-  let inputs : (Nx.float64_t P.Params.t, Nx.float64_t) Dilqr.Inputs.t =
+  let inputs : ((host float64_t, host) P.Params.t, host float64_t) Dilqr.Inputs.t =
     { Dilqr.Inputs.theta; x0; us0 }
   in
   let eager = Dilqr.solve_adaptive P.problem in
-  let compiled = Dilqr.solve_adaptive P.problem ~beam:0 ~parallel:1 in
+  let compiled = Dilqr.solve_adaptive P.problem ~jit:true in
   check_close
     ~msg:"differentiable adaptive compiled vs eager"
     ~tol:1e-10
@@ -715,10 +729,10 @@ let test_solve_adaptive_compiled () =
    primal trajectory is the same for both. *)
 let test_ad_modes_share_the_primal () =
   let module P = Integrator in
-  let theta : Nx.float64_t P.Params.t = { mass = scalar64 1.0 } in
+  let theta : (host float64_t, host) P.Params.t = { mass = scalar64 1.0 } in
   let x0 = vec64 [| 1.0; 0.0 |] in
   let us0 = us_of (List.init P.horizon ~f:(fun _ -> [ 0.0 ])) in
-  let inputs : (Nx.float64_t P.Params.t, Nx.float64_t) Dilqr.Inputs.t =
+  let inputs : ((host float64_t, host) P.Params.t, host float64_t) Dilqr.Inputs.t =
     { Dilqr.Inputs.theta; x0; us0 }
   in
   check_close
@@ -759,7 +773,7 @@ let test_adaptive_rejects_batches () =
 
 let pendulum_inputs () =
   let module P = Pendulum in
-  let theta : Nx.float64_t P.Params.t =
+  let theta : (host float64_t, host) P.Params.t =
     { gravity = scalar64 9.81; mass = scalar64 1.3; length = scalar64 0.9 }
   in
   let x0 = vec64 [| P.target -. 0.4; 0.1 |] in
@@ -970,7 +984,7 @@ let test_batched_forward_mode () =
    Riccati factors, the costate and the LQR solve against each other. *)
 let test_local_model_is_a_fixed_point () =
   let module P = Integrator in
-  let theta : Nx.float64_t P.Params.t = { mass = scalar64 1.0 } in
+  let theta : (host float64_t, host) P.Params.t = { mass = scalar64 1.0 } in
   let x0 = vec64 [| 1.0; 0.0 |] in
   let us0 = us_of (List.init P.horizon ~f:(fun _ -> [ 0.0 ])) in
   let sol = Dilqr.Solver.solve_fixed P.problem ~iters:12 theta x0 us0 in
@@ -983,7 +997,7 @@ let test_local_model_is_a_fixed_point () =
   printf "worst feedforward gain at the solution: %g\n" worst;
   require ~msg:"feedforward gain vanishes" Float.(worst < 1e-6);
   require ~msg:"modelled decrease vanishes" Float.(Float.abs (item d1) < 1e-6);
-  let (zerosol : (float, Nx.float64_elt) Dilqr.Lqr.solution) =
+  let (zerosol : (float, float64_elt, host) Dilqr.Lqr.solution) =
     Dilqr.Lqr.solve tape ~x0:(zeros float64 [| P.n |])
   in
   require
