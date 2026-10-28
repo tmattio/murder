@@ -20,12 +20,12 @@
 
 open Types
 
-type ('w, 'p) t =
+type ('w, 'p, 'd) t =
   { n : int (** state dimension *)
   ; m : int (** input dimension *)
-  ; structure : 'p Nx.Ptree.t (** the structure of the dynamics' parameters *)
+  ; structure : ('p, 'd) Nx.Ptree.t (** the structure of the dynamics' parameters *)
   ; params : 'p (** the parameters a fresh model starts from *)
-  ; dyn : 'p -> k:'w value -> x:'w value -> u:'w value -> 'w value
+  ; dyn : 'p -> k:('w, 'd) value -> x:('w, 'd) value -> u:('w, 'd) value -> ('w, 'd) value
     (** [dyn p ~k ~x ~u] is the next state. *)
   }
 
@@ -33,7 +33,12 @@ type ('w, 'p) t =
     of [u] and returns the state path, of shape [[T + 1; n]] against
     [[T; m]] controls (batch axes follow time on both). One {!Rune.scan}
     stands for the horizon, so the rollout traces and compiles. *)
-val integrate : ('w, 'p) t -> 'p -> x0:'w value -> u:'w value -> 'w value
+val integrate
+  :  ('w, 'p, 'd) t
+  -> 'p
+  -> x0:('w, 'd) value
+  -> u:('w, 'd) value
+  -> ('w, 'd) value
 
 (** {1:linear Linear} *)
 
@@ -46,19 +51,23 @@ val integrate : ('w, 'p) t -> 'p -> x0:'w value -> u:'w value -> 'w value
 module Linear : sig
   (** The parameters of a linear dynamics over payload ['a]. {!structure}
       gives their [Nx.Ptree.t]. *)
-  type 'a params =
-    { dt_over_tau : float [@ptree.skip] (** step size over time constant; not learned *)
+  type ('a, 'd) params =
+    { dt_over_tau : float (** step size over time constant; not learned *)
     ; w : 'a (** [[n; n]] *)
     ; b : 'a option (** [[m; n]], absent when the input needs no projection *)
     }
-  [@@deriving ptree]
+
+  val walk_params
+    :  ('a, 'b, 'd, 'e) Nx.Ptree.Walk.cursor
+    -> ('a, 'd) params
+    -> ('b, 'e) params
 
   (** [structure ()] is the [Nx.Ptree.t] of [params]. It is a function, not a
       value, so that it stays polymorphic in the dtype: call it where the
       structure is used. A top-level [let s = structure ()] would pin it to
       the first dtype, as any application does; write [let s () = structure ()]
       instead. *)
-  val structure : unit -> ('a, 'b) Nx.t params Nx.Ptree.t
+  val structure : unit -> ((('a, 'b, 'd) Nx.t, 'd) params, 'd) Nx.Ptree.t
 
   (** [make ~key ~alpha ~n ~m dtype] is a linear system with spectral
       abscissa [alpha] ([1.] by default) and step ratio [dt_over_tau = 0.1].
@@ -68,17 +77,22 @@ module Linear : sig
 
       Raises [Invalid_argument] if [n] or [m] is not positive. *)
   val make
-    :  ?key:Nx.Rng.t
+    :  ?key:Nx.host Nx.Rng.key
     -> ?alpha:float
     -> n:int
     -> m:int
     -> (float, 'w) Nx.dtype
-    -> ('w, (float, 'w) Nx.t params) t
+    -> ('w, ((float, 'w, Nx.host) Nx.t, Nx.host) params, Nx.host) t
 
   (** [matrix p] is [A = I + dt_over_tau (W − I)]. *)
-  val matrix : (float, 'w) Nx.t params -> 'w value
+  val matrix : ((float, 'w, 'd) Nx.t, 'd) params -> ('w, 'd) value
 
-  val dyn : (float, 'w) Nx.t params -> k:'w value -> x:'w value -> u:'w value -> 'w value
+  val dyn
+    :  ((float, 'w, 'd) Nx.t, 'd) params
+    -> k:('w, 'd) value
+    -> x:('w, 'd) value
+    -> u:('w, 'd) value
+    -> ('w, 'd) value
 end
 
 (** {1:linear_nonlinear Linear–nonlinear} *)
@@ -100,7 +114,7 @@ end
 module Linear_nonlinear : sig
   (** The parameters of a linear–nonlinear dynamics over payload ['a].
       {!structure} gives their [Nx.Ptree.t]. *)
-  type 'a params =
+  type ('a, 'd) params =
     { dt_over_tau : 'a (** [[n]] *)
     ; a0 : 'a (** [[n; n]] *)
     ; a1 : 'a (** [[n; nh]] *)
@@ -109,14 +123,18 @@ module Linear_nonlinear : sig
     ; bias2 : 'a (** [[n]] *)
     ; b : 'a option (** [[m; n]] *)
     }
-  [@@deriving ptree]
+
+  val walk_params
+    :  ('a, 'b, 'd, 'e) Nx.Ptree.Walk.cursor
+    -> ('a, 'd) params
+    -> ('b, 'e) params
 
   (** [structure ()] is the [Nx.Ptree.t] of [params]. It is a function, not a
       value, so that it stays polymorphic in the dtype: call it where the
       structure is used. A top-level [let s = structure ()] would pin it to
       the first dtype, as any application does; write [let s () = structure ()]
       instead. *)
-  val structure : unit -> ('a, 'b) Nx.t params Nx.Ptree.t
+  val structure : unit -> ((('a, 'b, 'd) Nx.t, 'd) params, 'd) Nx.Ptree.t
 
   (** [make ~key ~radius ~dt ~tau ~n ~nh ~m ~phi dtype] initializes
 
@@ -130,27 +148,27 @@ module Linear_nonlinear : sig
       [radius] defaults to [0.1], [key] to the current random scope. Raises
       [Invalid_argument] if [n], [nh] or [m] is not positive. *)
   val make
-    :  ?key:Nx.Rng.t
+    :  ?key:Nx.host Nx.Rng.key
     -> ?radius:float
     -> dt:float
     -> tau:float
     -> n:int
     -> nh:int
     -> m:int
-    -> phi:('w value -> 'w value)
+    -> phi:(('w, Nx.host) value -> ('w, Nx.host) value)
     -> (float, 'w) Nx.dtype
-    -> ('w, (float, 'w) Nx.t params) t
+    -> ('w, ((float, 'w, Nx.host) Nx.t, Nx.host) params, Nx.host) t
 
   (** The forward map. [phi] is the activation; the constructor captures it in
       the dynamics' [dyn], and exposing the map lets a caller use it without
       building a {!type-t}. *)
   val dyn
-    :  phi:('w value -> 'w value)
-    -> (float, 'w) Nx.t params
-    -> k:'w value
-    -> x:'w value
-    -> u:'w value
-    -> 'w value
+    :  phi:(('w, 'd) value -> ('w, 'd) value)
+    -> ((float, 'w, 'd) Nx.t, 'd) params
+    -> k:('w, 'd) value
+    -> x:('w, 'd) value
+    -> u:('w, 'd) value
+    -> ('w, 'd) value
 end
 
 (** {1:gnode Gated nonlinear ODE} *)
@@ -174,8 +192,8 @@ end
 module Gnode : sig
   (** The parameters of a gated dynamics over payload ['a]. {!structure}
       gives their [Nx.Ptree.t]. *)
-  type 'a params =
-    { dt_over_tau : float [@ptree.skip] (** step size over time constant; not learned *)
+  type ('a, 'd) params =
+    { dt_over_tau : float (** step size over time constant; not learned *)
     ; g_a1 : 'a (** [[n; n]] *)
     ; g_bias1 : 'a (** [[n]] *)
     ; h_a1 : 'a (** [[n; nh]] *)
@@ -184,14 +202,18 @@ module Gnode : sig
     ; h_bias2 : 'a (** [[n]] *)
     ; b : 'a option (** [[m; n]] *)
     }
-  [@@deriving ptree]
+
+  val walk_params
+    :  ('a, 'b, 'd, 'e) Nx.Ptree.Walk.cursor
+    -> ('a, 'd) params
+    -> ('b, 'e) params
 
   (** [structure ()] is the [Nx.Ptree.t] of [params]. It is a function, not a
       value, so that it stays polymorphic in the dtype: call it where the
       structure is used. A top-level [let s = structure ()] would pin it to
       the first dtype, as any application does; write [let s () = structure ()]
       instead. *)
-  val structure : unit -> ('a, 'b) Nx.t params Nx.Ptree.t
+  val structure : unit -> ((('a, 'b, 'd) Nx.t, 'd) params, 'd) Nx.Ptree.t
 
   (** [make ~key ~radius ~m ~dt ~tau ~n ~nh ~phi dtype] initializes [g_a1]
       and [g_bias1] at zero, [h_a1] from a normal of standard deviation
@@ -202,24 +224,24 @@ module Gnode : sig
       defaults to [n], with [b] then absent. Raises [Invalid_argument] if [n]
       or [nh] is not positive. *)
   val make
-    :  ?key:Nx.Rng.t
+    :  ?key:Nx.host Nx.Rng.key
     -> ?radius:float
     -> ?m:int
     -> dt:float
     -> tau:float
     -> n:int
     -> nh:int
-    -> phi:('w value -> 'w value)
+    -> phi:(('w, Nx.host) value -> ('w, Nx.host) value)
     -> (float, 'w) Nx.dtype
-    -> ('w, (float, 'w) Nx.t params) t
+    -> ('w, ((float, 'w, Nx.host) Nx.t, Nx.host) params, Nx.host) t
 
   val dyn
-    :  phi:('w value -> 'w value)
-    -> (float, 'w) Nx.t params
-    -> k:'w value
-    -> x:'w value
-    -> u:'w value
-    -> 'w value
+    :  phi:(('w, 'd) value -> ('w, 'd) value)
+    -> ((float, 'w, 'd) Nx.t, 'd) params
+    -> k:('w, 'd) value
+    -> x:('w, 'd) value
+    -> u:('w, 'd) value
+    -> ('w, 'd) value
 end
 
 (** {1:mgu Minimal gated unit} *)
@@ -259,21 +281,25 @@ end
 module Mgu : sig
   (** The parameters of a minimal gated unit over payload ['a]. {!structure}
       gives their [Nx.Ptree.t]. *)
-  type 'a params =
+  type ('a, 'd) params =
     { uf : 'a (** [[n; n]]; the state-to-gate weight *)
     ; uh : 'a (** [[n; n]]; applied to [f_t \odot z_{t-1}] *)
     ; w : 'a (** [[m; n]]; the additive input weight *)
     ; bf : 'a (** [[n]]; the gate bias *)
     ; bh : 'a (** [[n]]; the candidate bias *)
     }
-  [@@deriving ptree]
+
+  val walk_params
+    :  ('a, 'b, 'd, 'e) Nx.Ptree.Walk.cursor
+    -> ('a, 'd) params
+    -> ('b, 'e) params
 
   (** [structure ()] is the [Nx.Ptree.t] of [params]. It is a function, not a
       value, so that it stays polymorphic in the dtype: call it where the
       structure is used. A top-level [let s = structure ()] would pin it to
       the first dtype, as any application does; write [let s () = structure ()]
       instead. *)
-  val structure : unit -> ('a, 'b) Nx.t params Nx.Ptree.t
+  val structure : unit -> ((('a, 'b, 'd) Nx.t, 'd) params, 'd) Nx.Ptree.t
 
   (** [make ~key ~bias_f ~n ~m ~phi dtype] initializes [uf] and [uh] at zero
       (weak initial dynamics, easily controlled by the inputs), [w] from a
@@ -284,20 +310,20 @@ module Mgu : sig
       [bias_f] defaults to [0.5]. [key] defaults to the current random scope.
       Raises [Invalid_argument] if [n] or [m] is not positive. *)
   val make
-    :  ?key:Nx.Rng.t
+    :  ?key:Nx.host Nx.Rng.key
     -> ?bias_f:float
     -> n:int
     -> m:int
-    -> phi:('w value -> 'w value)
+    -> phi:(('w, Nx.host) value -> ('w, Nx.host) value)
     -> (float, 'w) Nx.dtype
-    -> ('w, (float, 'w) Nx.t params) t
+    -> ('w, ((float, 'w, Nx.host) Nx.t, Nx.host) params, Nx.host) t
 
   (** The forward map of {!make}, with the activation exposed. *)
   val dyn
-    :  phi:('w value -> 'w value)
-    -> (float, 'w) Nx.t params
-    -> k:'w value
-    -> x:'w value
-    -> u:'w value
-    -> 'w value
+    :  phi:(('w, 'd) value -> ('w, 'd) value)
+    -> ((float, 'w, 'd) Nx.t, 'd) params
+    -> k:('w, 'd) value
+    -> x:('w, 'd) value
+    -> u:('w, 'd) value
+    -> ('w, 'd) value
 end

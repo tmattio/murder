@@ -7,22 +7,19 @@ open Base
 open Nx
 open Types
 
-type ('w, 'p) t =
+type ('w, 'p, 'd) t =
   { n : int
   ; n_output : int
-  ; structure : 'p Nx.Ptree.t
+  ; structure : ('p, 'd) Nx.Ptree.t
   ; params : 'p
-  ; logp_t : 'p -> k:'w value -> x:'w value -> o:'w value -> 'w value
-  ; mean : 'p -> 'w value -> 'w value
-  ; sample : 'p -> key:Nx.Rng.t -> mean:'w value -> 'w value
+  ; logp_t :
+      'p -> k:('w, 'd) value -> x:('w, 'd) value -> o:('w, 'd) value -> ('w, 'd) value
+  ; mean : 'p -> ('w, 'd) value -> ('w, 'd) value
+  ; sample : 'p -> key:'d Nx.Rng.key -> mean:('w, 'd) value -> ('w, 'd) value
   }
 
 let log_2pi = Float.log (2.0 *. Float.pi)
-
-let randn ?key dtype shape =
-  match key with
-  | Some key -> Nx.Rng.normal key dtype shape
-  | None -> Nx.randn dtype shape
+let randn ?key dtype shape = Nx.Rng.normal ?key dtype shape
 
 (* [readout c x] is [x @ cᵀ] for a state row or a batch of rows: the last axis
    of [x] is contracted with the second axis of [c], whatever leading axes [x]
@@ -32,17 +29,23 @@ let readout c x = Infix.(x *@ matrix_transpose c)
 (* {1 Gaussian} *)
 
 module Gaussian = struct
-  type 'a params =
+  type ('a, 'd) params =
     { c : 'a
     ; bias : 'a
     ; log_variances : 'a
     }
-  [@@deriving ptree]
+
+  let walk_params cur x =
+    let open Nx.Ptree.Walk in
+    let c = field cur "c" leaf x.c in
+    let bias = field cur "bias" leaf x.bias in
+    let log_variances = field cur "log_variances" leaf x.log_variances in
+    { c; bias; log_variances }
 
   let structure () =
     Nx.Ptree.instantiate
       (module struct
-        type 'a t = 'a params
+        type ('a, 'd) t = ('a, 'd) params
 
         let walk = walk_params
       end)
@@ -75,7 +78,8 @@ module Gaussian = struct
       sum ~axes:[ -1 ] term *$ -0.5
     in
     let sample p ~key ~mean =
-      let noise = Nx.Rng.normal key dtype (shape mean) in
+      let at = Nx.Placement.uncut (Nx.placement mean) in
+      let noise = Nx.Rng.normal_at at ~key dtype (shape mean) in
       Infix.(mean + (noise * sqrt (exp p.log_variances)))
     in
     { n
@@ -95,17 +99,23 @@ end
 (* {1 Poisson} *)
 
 module Poisson = struct
-  type 'a params =
+  type ('a, 'd) params =
     { c : 'a
     ; bias : 'a
     ; log_gain : 'a
     }
-  [@@deriving ptree]
+
+  let walk_params cur x =
+    let open Nx.Ptree.Walk in
+    let c = field cur "c" leaf x.c in
+    let bias = field cur "bias" leaf x.bias in
+    let log_gain = field cur "log_gain" leaf x.log_gain in
+    { c; bias; log_gain }
 
   let structure () =
     Nx.Ptree.instantiate
       (module struct
-        type 'a t = 'a params
+        type ('a, 'd) t = ('a, 'd) params
 
         let walk = walk_params
       end)
@@ -140,7 +150,7 @@ module Poisson = struct
       let log_factorial = sum ~axes:[ -1 ] (Special.lgamma (o +$ 1.0)) in
       ll - log_factorial
     in
-    let sample _p ~key ~mean = cast dtype (Nx.Rng.poisson key mean) in
+    let sample _p ~key ~mean = cast dtype (Nx.Rng.poisson ~key mean) in
     { n
     ; n_output
     ; structure = structure ()

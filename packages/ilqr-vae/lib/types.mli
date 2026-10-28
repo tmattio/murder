@@ -9,4 +9,4 @@
     function of this library is polymorphic in ['w] and works at any float
     dtype. A {e trial} is one such tensor of shape [[n_steps; n_output]]: the
     leading axis is time, the last the observation channels. *)
-type 'w value = (float, 'w) Nx.t
+type ('w, 'd) value = (float, 'w, 'd) Nx.t

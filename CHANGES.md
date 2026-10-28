@@ -46,6 +46,10 @@ changes do not need an entry.
 
 ### ilqr-vae
 
+- Ported to the new nx and rune: every value type carries its device set,
+  `('w, 'd) Types.value`, and so do `Dynamics.t`, `Prior.t`, `Likelihood.t`,
+  `Recognition.t` and `Model.t`. Constructors (`make`, `init`) build host
+  values; samplers draw beside their parameters, from keys of their set.
 - Imported from `hennequin-lab/ilqr-vae-raven`.
 
 ### symo

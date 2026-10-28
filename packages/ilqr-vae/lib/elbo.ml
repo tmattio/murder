@@ -7,10 +7,10 @@ open Base
 open Nx
 open Types
 
-type 'w t =
-  { elbo : 'w value
-  ; log_likelihood : 'w value
-  ; kl : 'w value
+type ('w, 'd) t =
+  { elbo : ('w, 'd) value
+  ; log_likelihood : ('w, 'd) value
+  ; kl : ('w, 'd) value
   }
 
 (* [mean_over_batch t n] is the mean of a [[n]] tensor of per-sample
@@ -22,14 +22,15 @@ let mean_over_batch t n = Infix.(sum t /$ Float.of_int n)
    prior is evaluated step by step; the initial-state prior contributes
    exactly when the model has one. *)
 let log_prior
-      (type w d l p e r)
-      (model : (w, d, l, p, e, r) Model.t)
-      (params : (w, d, l, p, e, r) Model.params)
-      ~(x0 : w value)
-      ~(u : w value)
+      (type w y l p e r)
+      (model : (w, y, l, p, e, r, 'd) Model.t)
+      (params : (w, y, l, p, e, r, 'd) Model.params)
+      ~(x0 : (w, 'd) value)
+      ~(u : (w, 'd) value)
   =
   let t_steps = model.Model.n_steps in
-  let ks = arange model.Model.dtype 0 t_steps 1 in
+  let at = Nx.Placement.uncut (Nx.placement x0) in
+  let ks = arange_at at model.Model.dtype 0 t_steps 1 in
   let _, by_step =
     Rune.scan
       Nx.Ptree.unit
@@ -46,14 +47,14 @@ let log_prior
   | Some p -> Infix.(u_logp + Initial.logp p x0)
 
 let compute
-      (type w d l p e r)
-      (model : (w, d, l, p, e, r) Model.t)
-      (params : (w, d, l, p, e, r) Model.params)
+      (type w y l p e r)
+      (model : (w, y, l, p, e, r, 'd) Model.t)
+      (params : (w, y, l, p, e, r, 'd) Model.params)
       ?beta
-      ~(posterior : w Recognition.posterior)
+      ~(posterior : (w, 'd) Recognition.posterior)
       data
   =
-  let beta = Option.value beta ~default:(scalar model.Model.dtype 1.0) in
+  let beta = Option.value beta ~default:(scalar_like posterior.Recognition.x0 1.0) in
   let t_steps = model.Model.n_steps in
   let n_samples = Array.get (shape posterior.Recognition.x0) 0 in
   if n_samples <= 0 then invalid_arg "Elbo.compute: the posterior batch is empty";
@@ -66,7 +67,8 @@ let compute
   in
   (* Observation [k] is emitted from the state reached by [k + 1] inputs. *)
   let z_next = slice [ R (1, t_steps + 1) ] z in
-  let ks = arange model.Model.dtype 0 t_steps 1 in
+  let at = Nx.Placement.uncut (Nx.placement z) in
+  let ks = arange_at at model.Model.dtype 0 t_steps 1 in
   let _, likelihood_by_step =
     Rune.scan
       Nx.Ptree.unit
@@ -111,7 +113,8 @@ let batch_loss_fixed model params ?beta ~key ~n_samples ~iters trials =
   if count = 0 then invalid_arg "Elbo.batch_loss_fixed: the batch is empty";
   let keys = Nx.Rng.split ~n:count key in
   let total =
-    Array.foldi trials ~init:(scalar model.Model.dtype 0.0) ~f:(fun i acc data ->
-      Infix.(acc + loss_fixed model params ?beta ~key:keys.(i) ~n_samples ~iters data))
+    Array.mapi trials ~f:(fun i data ->
+      loss_fixed model params ?beta ~key:keys.(i) ~n_samples ~iters data)
+    |> Array.reduce_exn ~f:Infix.( + )
   in
   Infix.(total /$ Float.of_int count)

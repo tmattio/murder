@@ -46,11 +46,11 @@ open Types
 
 (** One ELBO pass's result: the bound and its two terms, from the same
     draws. Use it to monitor training without paying for a second pass. *)
-type 'w t =
-  { elbo : 'w value (** the bound, a scalar *)
-  ; log_likelihood : 'w value
+type ('w, 'd) t =
+  { elbo : ('w, 'd) value (** the bound, a scalar *)
+  ; log_likelihood : ('w, 'd) value
     (** the mean over draws of [Σ_k log p(o_k | z_k)], a scalar *)
-  ; kl : 'w value (** the sampled [E_q [log q − log p]], a scalar, at [β = 1] *)
+  ; kl : ('w, 'd) value (** the sampled [E_q [log q − log p]], a scalar, at [β = 1] *)
   }
 
 (** [compute model params ~posterior data] rolls the dynamics out under the
@@ -67,12 +67,12 @@ type 'w t =
 
     Raises [Invalid_argument] if the posterior batch is empty. *)
 val compute
-  :  ('w, 'd, 'l, 'p, 'e, 'r) Model.t
-  -> ('w, 'd, 'l, 'p, 'e, 'r) Model.params
-  -> ?beta:'w value
-  -> posterior:'w Recognition.posterior
-  -> 'w value
-  -> 'w t
+  :  ('w, 'y, 'l, 'p, 'e, 'r, 'd) Model.t
+  -> ('w, 'y, 'l, 'p, 'e, 'r, 'd) Model.params
+  -> ?beta:('w, 'd) value
+  -> posterior:('w, 'd) Recognition.posterior
+  -> ('w, 'd) value
+  -> ('w, 'd) t
 
 (** [loss model params ?iters ~key ~n_samples data] is the negated bound:
     the recognition's draws and {!compute}, in one call.
@@ -83,26 +83,26 @@ val compute
     adaptive solve. An LFADS recognition ignores it, since its encoder is a
     plain feedforward computation. *)
 val loss
-  :  ('w, 'd, 'l, 'p, 'e, 'r) Model.t
-  -> ('w, 'd, 'l, 'p, 'e, 'r) Model.params
-  -> ?beta:'w value
+  :  ('w, 'y, 'l, 'p, 'e, 'r, 'd) Model.t
+  -> ('w, 'y, 'l, 'p, 'e, 'r, 'd) Model.params
+  -> ?beta:('w, 'd) value
   -> ?iters:int
-  -> key:Nx.Rng.t
+  -> key:'d Nx.Rng.key
   -> n_samples:int
-  -> 'w value
-  -> 'w value
+  -> ('w, 'd) value
+  -> ('w, 'd) value
 
 (** [loss_fixed model params ~iters ~key ~n_samples data] is {!loss} with
     [iters] required: the traceable and JIT-compilable objective. *)
 val loss_fixed
-  :  ('w, 'd, 'l, 'p, 'e, 'r) Model.t
-  -> ('w, 'd, 'l, 'p, 'e, 'r) Model.params
-  -> ?beta:'w value
+  :  ('w, 'y, 'l, 'p, 'e, 'r, 'd) Model.t
+  -> ('w, 'y, 'l, 'p, 'e, 'r, 'd) Model.params
+  -> ?beta:('w, 'd) value
   -> iters:int
-  -> key:Nx.Rng.t
+  -> key:'d Nx.Rng.key
   -> n_samples:int
-  -> 'w value
-  -> 'w value
+  -> ('w, 'd) value
+  -> ('w, 'd) value
 
 (** [batch_loss_fixed model params ~key ~n_samples ~iters trials] is the mean
     of {!loss_fixed} over the trials. The key is split into one subkey per
@@ -112,21 +112,21 @@ val loss_fixed
     This is the mini-batch objective: [Rune.value_and_grad (Model.structure model) (fun p -> batch_loss_fixed model p …) params] gives the gradient
     over the batch in one pass. *)
 val batch_loss_fixed
-  :  ('w, 'd, 'l, 'p, 'e, 'r) Model.t
-  -> ('w, 'd, 'l, 'p, 'e, 'r) Model.params
-  -> ?beta:'w value
-  -> key:Nx.Rng.t
+  :  ('w, 'y, 'l, 'p, 'e, 'r, 'd) Model.t
+  -> ('w, 'y, 'l, 'p, 'e, 'r, 'd) Model.params
+  -> ?beta:('w, 'd) value
+  -> key:'d Nx.Rng.key
   -> n_samples:int
   -> iters:int
-  -> 'w value array
-  -> 'w value
+  -> ('w, 'd) value array
+  -> ('w, 'd) value
 
 (** [log_prior model params ~x0 ~u] is the model's log prior at a latent
     sample: [log p(x_0) + Σ_k log p(u_k)], one value per member of a batch.
     It is the term the bound contrasts with [log q]. *)
 val log_prior
-  :  ('w, 'd, 'l, 'p, 'e, 'r) Model.t
-  -> ('w, 'd, 'l, 'p, 'e, 'r) Model.params
-  -> x0:'w value
-  -> u:'w value
-  -> 'w value
+  :  ('w, 'y, 'l, 'p, 'e, 'r, 'd) Model.t
+  -> ('w, 'y, 'l, 'p, 'e, 'r, 'd) Model.params
+  -> x0:('w, 'd) value
+  -> u:('w, 'd) value
+  -> ('w, 'd) value

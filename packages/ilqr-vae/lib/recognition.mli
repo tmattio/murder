@@ -49,21 +49,21 @@ open Types
 (** The generative model as a recognition sees it: the dimensions, the
     dynamics, the likelihood and the priors. A subset of {!Model.t}, built by
     {!Model.generative}. *)
-type ('w, 'd, 'l, 'p, 'e) generative =
+type ('w, 'y, 'l, 'p, 'e, 'd) generative =
   { dtype : (float, 'w) Nx.dtype
   ; n : int
   ; m : int
   ; n_steps : int
   ; n_output : int
-  ; dynamics : ('w, 'd) Dynamics.t
-  ; likelihood : ('w, 'l) Likelihood.t
-  ; prior : ('w, 'p) Prior.t (** the generative prior over inputs *)
-  ; encoder_prior : ('w, 'e) Prior.t (** the prior of the iLQR cost, [p̃] *)
+  ; dynamics : ('w, 'y, 'd) Dynamics.t
+  ; likelihood : ('w, 'l, 'd) Likelihood.t
+  ; prior : ('w, 'p, 'd) Prior.t (** the generative prior over inputs *)
+  ; encoder_prior : ('w, 'e, 'd) Prior.t (** the prior of the iLQR cost, [p̃] *)
   }
 
 (** The corresponding parameters: a subset of {!Model.params}. *)
-type ('w, 'd, 'l, 'p, 'e) gparams =
-  { dynamics : 'd
+type ('w, 'y, 'l, 'p, 'e) gparams =
+  { dynamics : 'y
   ; likelihood : 'l
   ; prior : 'p
   ; encoder_prior : 'e
@@ -71,18 +71,18 @@ type ('w, 'd, 'l, 'p, 'e) gparams =
 
 (** One reparameterized draw of a trial's latents: the initial state, of shape
     [[n_samples; n]], and the inputs, of shape [[n_steps; n_samples; m]]. *)
-type 'w samples =
-  { x0 : 'w value
-  ; u : 'w value
+type ('w, 'd) samples =
+  { x0 : ('w, 'd) value
+  ; u : ('w, 'd) value
   }
 
 (** A draw together with the value of [log q] at it: [x0] and [u] as in
     {!type-samples}, and [log_prob] of shape [[n_samples]], one scalar per
     draw. *)
-type 'w posterior =
-  { x0 : 'w value
-  ; u : 'w value
-  ; log_prob : 'w value
+type ('w, 'd) posterior =
+  { x0 : ('w, 'd) value
+  ; u : ('w, 'd) value
+  ; log_prob : ('w, 'd) value
   }
 
 (** The dimensions a recognition is built for. {!Model.make} checks them
@@ -98,36 +98,36 @@ type dims =
     generative model and its parameters as values, and the recognition's own
     parameters explicitly, so a recognition built once is applied at whatever
     parameters a training step reaches. *)
-type ('w, 'd, 'l, 'p, 'e, 'r) t =
+type ('w, 'y, 'l, 'p, 'e, 'r, 'd) t =
   { dims : dims
   ; infers_initial : bool
   ; name : string (** a short name, for diagnostics and printing *)
-  ; structure : 'r Nx.Ptree.t
+  ; structure : ('r, 'd) Nx.Ptree.t
   ; params : 'r (** the parameters a fresh model starts from *)
   ; infer :
-      ('w, 'd, 'l, 'p, 'e) generative
-      -> ('w, 'd, 'l, 'p, 'e) gparams
+      ('w, 'y, 'l, 'p, 'e, 'd) generative
+      -> ('w, 'y, 'l, 'p, 'e) gparams
       -> params:'r
       -> ?iters:int
       -> n_samples:int
-      -> key:Nx.Rng.t
-      -> 'w value
-      -> 'w posterior
+      -> key:'d Nx.Rng.key
+      -> ('w, 'd) value
+      -> ('w, 'd) posterior
   ; mean :
-      ('w, 'd, 'l, 'p, 'e) generative
-      -> ('w, 'd, 'l, 'p, 'e) gparams
+      ('w, 'y, 'l, 'p, 'e, 'd) generative
+      -> ('w, 'y, 'l, 'p, 'e) gparams
       -> params:'r
       -> ?iters:int
-      -> 'w value
-      -> 'w samples
+      -> ('w, 'd) value
+      -> ('w, 'd) samples
   ; log_prob :
-      ('w, 'd, 'l, 'p, 'e) generative
-      -> ('w, 'd, 'l, 'p, 'e) gparams
+      ('w, 'y, 'l, 'p, 'e, 'd) generative
+      -> ('w, 'y, 'l, 'p, 'e) gparams
       -> params:'r
       -> ?iters:int
-      -> 'w value
-      -> 'w samples
-      -> 'w value
+      -> ('w, 'd) value
+      -> ('w, 'd) samples
+      -> ('w, 'd) value
   }
 
 (** [infer rec gen gp ~params ~n_samples ~key data] draws [n_samples] latent
@@ -145,27 +145,27 @@ type ('w, 'd, 'l, 'p, 'e, 'r) t =
     library objective will disagree — check a live-density objective, as the
     test suite does. *)
 val infer
-  :  ('w, 'd, 'l, 'p, 'e, 'r) t
-  -> ('w, 'd, 'l, 'p, 'e) generative
-  -> ('w, 'd, 'l, 'p, 'e) gparams
+  :  ('w, 'y, 'l, 'p, 'e, 'r, 'd) t
+  -> ('w, 'y, 'l, 'p, 'e, 'd) generative
+  -> ('w, 'y, 'l, 'p, 'e) gparams
   -> params:'r
   -> ?iters:int
   -> n_samples:int
-  -> key:Nx.Rng.t
-  -> 'w value
-  -> 'w posterior
+  -> key:'d Nx.Rng.key
+  -> ('w, 'd) value
+  -> ('w, 'd) posterior
 
 (** [mean rec gen gp ~params data] is the posterior mean: a single
     deterministic latent trajectory, shaped like a batch of one
     ([x0] of shape [[1; n]] and [u] of shape [[n_steps; 1; m]]). *)
 val mean
-  :  ('w, 'd, 'l, 'p, 'e, 'r) t
-  -> ('w, 'd, 'l, 'p, 'e) generative
-  -> ('w, 'd, 'l, 'p, 'e) gparams
+  :  ('w, 'y, 'l, 'p, 'e, 'r, 'd) t
+  -> ('w, 'y, 'l, 'p, 'e, 'd) generative
+  -> ('w, 'y, 'l, 'p, 'e) gparams
   -> params:'r
   -> ?iters:int
-  -> 'w value
-  -> 'w samples
+  -> ('w, 'd) value
+  -> ('w, 'd) samples
 
 (** [log_prob rec gen gp ~params data s] is [log q(s | data)], one value per
     member of a batch, with live parameters: the same value {!val-infer}
@@ -174,21 +174,21 @@ val mean
     second pass over the data, so this is for latents from elsewhere: an
     importance-weighted bound, a fixed set of draws, a diagnostic. *)
 val log_prob
-  :  ('w, 'd, 'l, 'p, 'e, 'r) t
-  -> ('w, 'd, 'l, 'p, 'e) generative
-  -> ('w, 'd, 'l, 'p, 'e) gparams
+  :  ('w, 'y, 'l, 'p, 'e, 'r, 'd) t
+  -> ('w, 'y, 'l, 'p, 'e, 'd) generative
+  -> ('w, 'y, 'l, 'p, 'e) gparams
   -> params:'r
   -> ?iters:int
-  -> 'w value
-  -> 'w samples
-  -> 'w value
+  -> ('w, 'd) value
+  -> ('w, 'd) samples
+  -> ('w, 'd) value
 
 (** [gparams_structure gen] is the [Nx.Ptree.t] of {!type-gparams} at [gen],
     for a caller that differentiates through a recognition's own use of the
     generative parameters. *)
 val gparams_structure
-  :  ('w, 'd, 'l, 'p, 'e) generative
-  -> ('w, 'd, 'l, 'p, 'e) gparams Nx.Ptree.t
+  :  ('w, 'y, 'l, 'p, 'e, 'd) generative
+  -> (('w, 'y, 'l, 'p, 'e) gparams, 'd) Nx.Ptree.t
 
 (** {1 iLQR recognition} *)
 
@@ -215,15 +215,19 @@ val gparams_structure
 module Iilqr : sig
   (** The recognition's parameters: the Cholesky factors of the two
       covariances, exactly as {!Covariance.params}. *)
-  type 'a params =
-    { space_cov : 'a Covariance.params (** [[m]]-dimensional factor *)
-    ; time_cov : 'a Covariance.params (** [[n_steps]]-dimensional factor *)
+  type ('a, 'd) params =
+    { space_cov : ('a, 'd) Covariance.params (** [[m]]-dimensional factor *)
+    ; time_cov : ('a, 'd) Covariance.params (** [[n_steps]]-dimensional factor *)
     }
-  [@@deriving ptree]
+
+  val walk_params
+    :  ('a, 'b, 'd, 'e) Nx.Ptree.Walk.cursor
+    -> ('a, 'd) params
+    -> ('b, 'e) params
 
   (** [structure ()] is the [Nx.Ptree.t] of [params]. It is a function, not a
       value, so that it stays polymorphic in the dtype. *)
-  val structure : unit -> ('a, 'b) Nx.t params Nx.Ptree.t
+  val structure : unit -> ((('a, 'b, 'd) Nx.t, 'd) params, 'd) Nx.Ptree.t
 
   (** [init ?space_sigma2 ?time_sigma2 ~n ~m ~n_steps ~n_output dtype] is the
       initial parameters: factors of [space_sigma2 · I] and [time_sigma2 · I],
@@ -237,15 +241,15 @@ module Iilqr : sig
     -> n_steps:int
     -> n_output:int
     -> (float, 'w) Nx.dtype
-    -> 'w value params
+    -> (('w, Nx.host) value, Nx.host) params
 
   (** [problem gen gp data] is the encoder's control problem for one trial,
       as a {!Dilqr.Problem.t} whose parameters are [gp]. *)
   val problem
-    :  ('w, 'd, 'l, 'p, 'e) generative
-    -> ('w, 'd, 'l, 'p, 'e) gparams
-    -> 'w value
-    -> ('w, ('w, 'd, 'l, 'p, 'e) gparams) Dilqr.Problem.t
+    :  ('w, 'y, 'l, 'p, 'e, 'd) generative
+    -> ('w, 'y, 'l, 'p, 'e) gparams
+    -> ('w, 'd) value
+    -> ('w, ('w, 'y, 'l, 'p, 'e) gparams, 'd) Dilqr.Problem.t
 
   (** [posterior_mean gen gp ?u_init ?max_iter ?conv_threshold data] is the
       adaptive iLQR solution's controls, of shape [[n_steps; m]]. [u_init]
@@ -253,27 +257,27 @@ module Iilqr : sig
       gradient. Differentiable through {!Dilqr.solve_adaptive}'s implicit VJP;
       eager only, so do not put it inside {!Rune.jit}. *)
   val posterior_mean
-    :  ('w, 'd, 'l, 'p, 'e) generative
-    -> ('w, 'd, 'l, 'p, 'e) gparams
-    -> ?u_init:'w value
+    :  ('w, 'y, 'l, 'p, 'e, 'd) generative
+    -> ('w, 'y, 'l, 'p, 'e) gparams
+    -> ?u_init:('w, 'd) value
     -> ?max_iter:int
     -> ?conv_threshold:float
-    -> 'w value
-    -> 'w value
+    -> ('w, 'd) value
+    -> ('w, 'd) value
 
   (** [posterior_mean_fixed gen gp ?u_init ~iters ?alphas ?mu ?c1 data] is the
       same mean with [iters] fixed iterations: tensor-only control flow,
       traceable and JIT-compilable together with its implicit VJP. *)
   val posterior_mean_fixed
-    :  ('w, 'd, 'l, 'p, 'e) generative
-    -> ('w, 'd, 'l, 'p, 'e) gparams
-    -> ?u_init:'w value
+    :  ('w, 'y, 'l, 'p, 'e, 'd) generative
+    -> ('w, 'y, 'l, 'p, 'e) gparams
+    -> ?u_init:('w, 'd) value
     -> iters:int
     -> ?alphas:float list
     -> ?mu:float
     -> ?c1:float
-    -> 'w value
-    -> 'w value
+    -> ('w, 'd) value
+    -> ('w, 'd) value
 
   (** [make ?space_sigma2 ?time_sigma2 ~n ~m ~n_steps ~n_output dtype] is the
       recognition, with covariance factors initialized as {!init} does. *)
@@ -285,7 +289,7 @@ module Iilqr : sig
     -> n_steps:int
     -> n_output:int
     -> (float, 'w) Nx.dtype
-    -> ('w, 'd, 'l, 'p, 'e, 'w value params) t
+    -> ('w, 'y, 'l, 'p, 'e, (('w, Nx.host) value, Nx.host) params, Nx.host) t
 end
 
 (** {1 LFADS recognition} *)
@@ -317,12 +321,12 @@ module Lfads : sig
   (** The recognition's parameters: the five cells, their learned initial
       states, and the two readouts. All are learned with the rest of the
       model. *)
-  type 'a params =
-    { ic_fwd : 'a Dynamics.Mgu.params (** initial-condition encoder, forward *)
-    ; ic_bwd : 'a Dynamics.Mgu.params (** initial-condition encoder, backward *)
-    ; ci_fwd : 'a Dynamics.Mgu.params (** controller-input encoder, forward *)
-    ; ci_bwd : 'a Dynamics.Mgu.params (** controller-input encoder, backward *)
-    ; con : 'a Dynamics.Mgu.params (** controller RNN *)
+  type ('a, 'd) params =
+    { ic_fwd : ('a, 'd) Dynamics.Mgu.params (** initial-condition encoder, forward *)
+    ; ic_bwd : ('a, 'd) Dynamics.Mgu.params (** initial-condition encoder, backward *)
+    ; ci_fwd : ('a, 'd) Dynamics.Mgu.params (** controller-input encoder, forward *)
+    ; ci_bwd : ('a, 'd) Dynamics.Mgu.params (** controller-input encoder, backward *)
+    ; con : ('a, 'd) Dynamics.Mgu.params (** controller RNN *)
     ; ic_fwd_init : 'a (** [[n_ic]] *)
     ; ic_bwd_init : 'a (** [[n_ic]] *)
     ; ci_fwd_init : 'a (** [[n_ci]] *)
@@ -333,11 +337,15 @@ module Lfads : sig
     ; u_readout : 'a (** [[n_ctrl; 2 m]]; the mean and log-variance of [u_t] *)
     ; u_readout_bias : 'a (** [[2 m]] *)
     }
-  [@@deriving ptree]
+
+  val walk_params
+    :  ('a, 'b, 'd, 'e) Nx.Ptree.Walk.cursor
+    -> ('a, 'd) params
+    -> ('b, 'e) params
 
   (** [structure ()] is the [Nx.Ptree.t] of [params]. It is a function, not a
       value, so that it stays polymorphic in the dtype. *)
-  val structure : unit -> ('a, 'b) Nx.t params Nx.Ptree.t
+  val structure : unit -> ((('a, 'b, 'd) Nx.t, 'd) params, 'd) Nx.Ptree.t
 
   (** [make ?n_ic ?n_ci ?n_ctrl ?with_inputs ?phi ?key ~n ~m ~n_steps ~n_output dtype] is the recognition.
 
@@ -360,12 +368,12 @@ module Lfads : sig
     -> ?n_ci:int
     -> ?n_ctrl:int
     -> ?with_inputs:bool
-    -> ?phi:('w value -> 'w value)
-    -> ?key:Nx.Rng.t
+    -> ?phi:(('w, Nx.host) value -> ('w, Nx.host) value)
+    -> ?key:Nx.host Nx.Rng.key
     -> n:int
     -> m:int
     -> n_steps:int
     -> n_output:int
     -> (float, 'w) Nx.dtype
-    -> ('w, 'd, 'l, 'p, 'e, 'w value params) t
+    -> ('w, 'y, 'l, 'p, 'e, (('w, Nx.host) value, Nx.host) params, Nx.host) t
 end

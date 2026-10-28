@@ -7,14 +7,18 @@ open Base
 open Nx
 open Types
 
-type ('w, 'p) t =
+type ('w, 'p, 'd) t =
   { m : int
-  ; structure : 'p Nx.Ptree.t
+  ; structure : ('p, 'd) Nx.Ptree.t
   ; params : 'p
-  ; logp_t : 'p -> k:'w value -> u:'w value -> 'w value
-  ; sample : 'p -> key:Nx.Rng.t -> n_steps:int -> 'w value
+  ; logp_t : 'p -> k:('w, 'd) value -> u:('w, 'd) value -> ('w, 'd) value
+  ; sample : 'p -> key:'d Nx.Rng.key -> n_steps:int -> ('w, 'd) value
   ; kl_to_gaussian :
-      ('p -> mu:'w value -> space_factor:'w value -> time_factor:'w value -> 'w value)
+      ('p
+       -> mu:('w, 'd) value
+       -> space_factor:('w, 'd) value
+       -> time_factor:('w, 'd) value
+       -> ('w, 'd) value)
         option
   }
 
@@ -22,7 +26,7 @@ let log_2pi = Float.log (2.0 *. Float.pi)
 let log_2 = Float.log 2.0
 
 (* [first_step k] is a boolean scalar that is [true] at step 0. *)
-let first_step (k : 'w value) = Nx.equal k (scalar_like k 0.0)
+let first_step (k : ('w, 'd) value) = Nx.equal k (scalar_like k 0.0)
 
 (* [gaussian_logp ~log_scale ~log_scale_first ~k ~u] is the log density of a
    factorized zero-mean Gaussian, summed over the last axis: per-row scalars
@@ -35,26 +39,31 @@ let gaussian_logp ~log_scale ~log_scale_first ~k ~u =
   let term = (scaled * scaled) + ((log_scale_k *$ 2.0) +$ log_2pi) in
   sum ~axes:[ -1 ] term *$ -0.5
 
-(* [steps_mask dtype ~n_steps] is a boolean [[n_steps; 1]] tensor that is
+(* [steps_mask p.log_spatial_stds ~n_steps] is a boolean [[n_steps; 1]] tensor that is
    [true] at the first step. Samplers use it to give that step its own
    distribution. *)
-let steps_mask (dtype : (float, 'w) Nx.dtype) ~n_steps =
-  let k = arange dtype 0 n_steps 1 in
-  unsqueeze ~axes:[ 1 ] (Nx.equal k (scalar dtype 0.0))
+let steps_mask (x : (float, 'w, 'd) Nx.t) ~n_steps =
+  let k = arange_at (Nx.Placement.uncut (Nx.placement x)) (Nx.dtype x) 0 n_steps 1 in
+  unsqueeze ~axes:[ 1 ] (Nx.equal_s k 0.0)
 
 (* {1 Gaussian} *)
 
 module Gaussian = struct
-  type 'a params =
+  type ('a, 'd) params =
     { log_spatial_stds : 'a
     ; log_first_bin : 'a
     }
-  [@@deriving ptree]
+
+  let walk_params cur x =
+    let open Nx.Ptree.Walk in
+    let log_spatial_stds = field cur "log_spatial_stds" leaf x.log_spatial_stds in
+    let log_first_bin = field cur "log_first_bin" leaf x.log_first_bin in
+    { log_spatial_stds; log_first_bin }
 
   let structure () =
     Nx.Ptree.instantiate
       (module struct
-        type 'a t = 'a params
+        type ('a, 'd) t = ('a, 'd) params
 
         let walk = walk_params
       end)
@@ -72,8 +81,15 @@ module Gaussian = struct
     let dtype = Nx.dtype p.log_spatial_stds in
     let open Infix in
     let scale = broadcast_to [| n_steps; m |] p.log_spatial_stds in
-    let log_scale = where (steps_mask dtype ~n_steps) (scale + p.log_first_bin) scale in
-    Nx.Rng.normal key dtype [| n_steps; m |] * exp log_scale
+    let log_scale =
+      where (steps_mask p.log_spatial_stds ~n_steps) (scale + p.log_first_bin) scale
+    in
+    Nx.Rng.normal_at
+      (Nx.Placement.uncut (Nx.placement p.log_spatial_stds))
+      ~key
+      dtype
+      [| n_steps; m |]
+    * exp log_scale
 
   (* [KL(q ‖ p)] with [q = N(mu, Σ_t ⊗ Σ_s)] and a factorized Gaussian [p]:
      the quadratic form of [mu], the trace [tr (Σ_p⁻¹ Σ_q)], and the two log
@@ -82,13 +98,12 @@ module Gaussian = struct
   let kl_to_gaussian p ~mu ~space_factor ~time_factor =
     let t_steps = Array.get (shape mu) 0 in
     let m = Array.get (shape mu) 1 in
-    let dtype = Nx.dtype mu in
     let spatial = exp p.log_spatial_stds in
     let sig_t =
       where
-        (steps_mask dtype ~n_steps:t_steps)
+        (steps_mask mu ~n_steps:t_steps)
         (broadcast_to [| t_steps; 1 |] (exp p.log_first_bin))
-        (ones dtype [| t_steps; 1 |])
+        (ones_like (broadcast_to [| t_steps; 1 |] (exp p.log_first_bin)))
     in
     let quadratic =
       let open Infix in
@@ -138,17 +153,23 @@ end
 (* {1 Student-t} *)
 
 module Student = struct
-  type 'a params =
+  type ('a, 'd) params =
     { log_spatial_stds : 'a
     ; log_nu_minus_two : 'a
     ; log_first_stds : 'a
     }
-  [@@deriving ptree]
+
+  let walk_params cur x =
+    let open Nx.Ptree.Walk in
+    let log_spatial_stds = field cur "log_spatial_stds" leaf x.log_spatial_stds in
+    let log_nu_minus_two = field cur "log_nu_minus_two" leaf x.log_nu_minus_two in
+    let log_first_stds = field cur "log_first_stds" leaf x.log_first_stds in
+    { log_spatial_stds; log_nu_minus_two; log_first_stds }
 
   let structure () =
     Nx.Ptree.instantiate
       (module struct
-        type 'a t = 'a params
+        type ('a, 'd) t = ('a, 'd) params
 
         let walk = walk_params
       end)
@@ -191,15 +212,16 @@ module Student = struct
     let nu, sigma, _ = t_params p in
     (* [u = σ · z / sqrt (χ²_ν / ν)] is a multivariate t with [ν] degrees of
        freedom, which is the density [logp_t] writes. *)
-    let z = Nx.Rng.normal k1 dtype [| n_steps; m |] in
+    let at = Nx.Placement.uncut (Nx.placement p.log_spatial_stds) in
+    let z = Nx.Rng.normal_at at ~key:k1 dtype [| n_steps; m |] in
     let open Infix in
-    let chi2 = Nx.Rng.gamma k2 (nu *$ 0.5) *$ 2.0 in
+    let chi2 = Nx.Rng.gamma ~key:k2 (nu *$ 0.5) *$ 2.0 in
     let t = z / sqrt (chi2 / nu) in
     let first =
-      Nx.Rng.normal k3 dtype [| n_steps; m |]
+      Nx.Rng.normal_at at ~key:k3 dtype [| n_steps; m |]
       * broadcast_to [| n_steps; m |] (exp p.log_first_stds)
     in
-    where (steps_mask dtype ~n_steps) first (t * sigma)
+    where (steps_mask p.log_spatial_stds ~n_steps) first (t * sigma)
 
   let make ?(spatial_std = 1.0) ?(nu = 10.0) ?(first_std = 1.0) ~m dtype =
     if m <= 0 then invalid_arg "Prior.Student.make: m must be positive";
@@ -225,23 +247,27 @@ end
 (* {1 Laplacian} *)
 
 module Laplacian = struct
-  type 'a params =
+  type ('a, 'd) params =
     { log_spatial_stds : 'a
     ; log_first_stds : 'a
     }
-  [@@deriving ptree]
+
+  let walk_params cur x =
+    let open Nx.Ptree.Walk in
+    let log_spatial_stds = field cur "log_spatial_stds" leaf x.log_spatial_stds in
+    let log_first_stds = field cur "log_first_stds" leaf x.log_first_stds in
+    { log_spatial_stds; log_first_stds }
 
   let structure () =
     Nx.Ptree.instantiate
       (module struct
-        type 'a t = 'a params
+        type ('a, 'd) t = ('a, 'd) params
 
         let walk = walk_params
       end)
 
   let logp_t p ~k ~u =
     let m = Array.get (shape p.log_spatial_stds) 0 in
-    let dtype = Nx.dtype u in
     let sigma = exp p.log_spatial_stds in
     let gaussian =
       gaussian_logp ~log_scale:p.log_spatial_stds ~log_scale_first:p.log_first_stds ~k ~u
@@ -249,7 +275,7 @@ module Laplacian = struct
     let laplace =
       Infix.(
         -(sum ~axes:[ -1 ] (abs u / sigma)
-          + (sum p.log_spatial_stds + scalar dtype (Float.of_int m *. log_2))))
+          + (sum p.log_spatial_stds +$ (Float.of_int m *. log_2))))
     in
     where (first_step k) gaussian laplace
 
@@ -260,14 +286,15 @@ module Laplacian = struct
     let k1, k2, k3 = Nx.Rng.split ~n:3 key |> fun a -> a.(0), a.(1), a.(2) in
     let open Infix in
     let scale = exp p.log_spatial_stds in
-    let magnitude = Nx.Rng.exponential k1 dtype [| n_steps; m |] * scale in
-    let signs = sign (Nx.Rng.normal k2 dtype [| n_steps; m |]) in
+    let at = Nx.Placement.uncut (Nx.placement p.log_spatial_stds) in
+    let magnitude = Nx.Rng.exponential_at at ~key:k1 dtype [| n_steps; m |] * scale in
+    let signs = sign (Nx.Rng.normal_at at ~key:k2 dtype [| n_steps; m |]) in
     let laplace = signs * magnitude in
     let first =
-      Nx.Rng.normal k3 dtype [| n_steps; m |]
+      Nx.Rng.normal_at at ~key:k3 dtype [| n_steps; m |]
       * broadcast_to [| n_steps; m |] (exp p.log_first_stds)
     in
-    where (steps_mask dtype ~n_steps) first laplace
+    where (steps_mask p.log_spatial_stds ~n_steps) first laplace
 
   let make ?(spatial_std = 1.0) ?(first_std = 1.0) ~m dtype =
     if m <= 0 then invalid_arg "Prior.Laplacian.make: m must be positive";

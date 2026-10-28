@@ -27,30 +27,38 @@
 open Types
 
 (** The parameters of one covariance factor over payload ['a]. *)
-type 'a params =
+type ('a, 'd) params =
   { d : 'a (** the diagonal, shape [[n]] *)
   ; t : 'a (** the strictly upper triangle, shape [[n; n]]; read is [triu t 1] *)
   }
-[@@deriving ptree]
+
+val walk_params
+  :  ('a, 'b, 'd, 'e) Nx.Ptree.Walk.cursor
+  -> ('a, 'd) params
+  -> ('b, 'e) params
 
 (** [structure ()] is the [Nx.Ptree.t] of [params]. It is a function, not a
     value, so that it stays polymorphic in the dtype: call it where the
     structure is used. A top-level [let s = structure ()] would pin it to the
     first dtype, as any application does; write [let s () = structure ()]
     instead. *)
-val structure : unit -> ('a, 'b) Nx.t params Nx.Ptree.t
+val structure : unit -> ((('a, 'b, 'd) Nx.t, 'd) params, 'd) Nx.Ptree.t
 
 (** [make ~sigma2 ~n dtype] is the factor of a covariance [sigma2 · I]: its
     diagonal is [sqrt sigma2] and its strictly upper triangle is zero.
 
     [sigma2] defaults to [1.]. Raises [Invalid_argument] if [n] is not
     positive or [sigma2] is not positive. *)
-val make : ?sigma2:float -> n:int -> (float, 'w) Nx.dtype -> 'w value params
+val make
+  :  ?sigma2:float
+  -> n:int
+  -> (float, 'w) Nx.dtype
+  -> (('w, Nx.host) value, Nx.host) params
 
 (** [factor p] is [L = triu p.t 1 + diag p.d], the triangular factor with
     [Σ = L Lᵀ]. Differentiable and traceable. *)
-val factor : 'w value params -> 'w value
+val factor : (('w, 'd) value, 'd) params -> ('w, 'd) value
 
 (** [log_det p] is [log det Σ = 2 Σ log (diag L)] for [L = factor p], a
     scalar tensor. Only the diagonal of the factor contributes. *)
-val log_det : 'w value params -> 'w value
+val log_det : (('w, 'd) value, 'd) params -> ('w, 'd) value

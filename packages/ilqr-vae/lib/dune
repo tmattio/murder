@@ -2,8 +2,6 @@
  (name ilqr_vae)
  (public_name ilqr-vae)
  (libraries base nx rune dilqr)
- (preprocess
-  (pps ppx_ptree))
  (modules
   types
   special

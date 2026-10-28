@@ -7,17 +7,18 @@ open Base
 open Nx
 open Types
 
-type ('w, 'p) t =
+type ('w, 'p, 'd) t =
   { n : int
   ; m : int
-  ; structure : 'p Nx.Ptree.t
+  ; structure : ('p, 'd) Nx.Ptree.t
   ; params : 'p
-  ; dyn : 'p -> k:'w value -> x:'w value -> u:'w value -> 'w value
+  ; dyn : 'p -> k:('w, 'd) value -> x:('w, 'd) value -> u:('w, 'd) value -> ('w, 'd) value
   }
 
-let integrate (d : ('w, 'p) t) (p : 'p) ~(x0 : 'w value) ~(u : 'w value) =
+let integrate (d : ('w, 'p, 'd) t) (p : 'p) ~(x0 : ('w, 'd) value) ~(u : ('w, 'd) value) =
   let horizon = (shape u).(0) in
-  let ks = arange (Nx.dtype x0) 0 horizon 1 in
+  let at = Nx.Placement.uncut (Nx.placement x0) in
+  let ks = arange_at at (Nx.dtype x0) 0 horizon 1 in
   let _, xs =
     Rune.scan
       Nx.Ptree.tensor
@@ -37,10 +38,7 @@ let integrate (d : ('w, 'p) t) (p : 'p) ~(x0 : 'w value) ~(u : 'w value) =
 
 (* [randn ?key dtype shape] is a standard normal draw, from [key] when given
    and from the implicit random scope otherwise. *)
-let randn ?key dtype shape =
-  match key with
-  | Some key -> Nx.Rng.normal key dtype shape
-  | None -> Nx.randn dtype shape
+let randn ?key dtype shape = Nx.Rng.normal ?key dtype shape
 
 (* [scaled_randn ?key ~sigma dtype shape] is a normal draw of standard
    deviation [sigma]. *)
@@ -49,7 +47,7 @@ let scaled_randn ?key ~sigma dtype shape = Infix.(randn ?key dtype shape *$ sigm
 (* [first_step k] is a boolean scalar that is [true] at step 0. A dynamics
    written for these constructors selects on it with [Nx.where], since [k] is
    a tensor under the encoder's scans. *)
-let first_step (k : 'w value) = Nx.equal k (scalar_like k 0.0)
+let first_step (k : ('w, 'd) value) = Nx.equal k (scalar_like k 0.0)
 
 (* [input_term ~dt_over_tau ~k ~u] is the input contribution of one step: the
    projected input itself at the first step, [dt_over_tau] times it
@@ -66,23 +64,31 @@ let input_term ~dt_over_tau ~k ~u =
 (* {1 Linear} *)
 
 module Linear = struct
-  type 'a params =
-    { dt_over_tau : float [@ptree.skip]
+  type ('a, 'd) params =
+    { dt_over_tau : float
     ; w : 'a
     ; b : 'a option
     }
-  [@@deriving ptree]
+
+  let walk_params cur x =
+    let open Nx.Ptree.Walk in
+    let dt_over_tau = x.dt_over_tau in
+    let w = field cur "w" leaf x.w in
+    let b = field cur "b" (option leaf) x.b in
+    { dt_over_tau; w; b }
 
   let structure () =
     Nx.Ptree.instantiate
       (module struct
-        type 'a t = 'a params
+        type ('a, 'd) t = ('a, 'd) params
 
         let walk = walk_params
       end)
 
   let matrix { dt_over_tau; w; _ } =
-    let identity = eye (Nx.dtype w) (Array.get (shape w) 0) in
+    let identity =
+      eye_at (Nx.Placement.uncut (Nx.placement w)) (Nx.dtype w) (Array.get (shape w) 0)
+    in
     Infix.(identity + ((w - identity) *$ dt_over_tau))
 
   let dyn p ~k ~x ~u =
@@ -105,7 +111,7 @@ end
 (* {1 Linear–nonlinear} *)
 
 module Linear_nonlinear = struct
-  type 'a params =
+  type ('a, 'd) params =
     { dt_over_tau : 'a
     ; a0 : 'a
     ; a1 : 'a
@@ -114,12 +120,22 @@ module Linear_nonlinear = struct
     ; bias2 : 'a
     ; b : 'a option
     }
-  [@@deriving ptree]
+
+  let walk_params cur x =
+    let open Nx.Ptree.Walk in
+    let dt_over_tau = field cur "dt_over_tau" leaf x.dt_over_tau in
+    let a0 = field cur "a0" leaf x.a0 in
+    let a1 = field cur "a1" leaf x.a1 in
+    let a2 = field cur "a2" leaf x.a2 in
+    let bias1 = field cur "bias1" leaf x.bias1 in
+    let bias2 = field cur "bias2" leaf x.bias2 in
+    let b = field cur "b" (option leaf) x.b in
+    { dt_over_tau; a0; a1; a2; bias1; bias2; b }
 
   let structure () =
     Nx.Ptree.instantiate
       (module struct
-        type 'a t = 'a params
+        type ('a, 'd) t = ('a, 'd) params
 
         let walk = walk_params
       end)
@@ -153,7 +169,7 @@ module Linear_nonlinear = struct
             ~sigma:(radius /. Float.sqrt (Float.of_int nh))
             dtype
             [| nh; n |]
-      ; bias1 = Infix.((rand dtype [| nh |] *$ 2.0) -$ 1.0)
+      ; bias1 = Infix.((Nx.Rng.uniform dtype [| nh |] *$ 2.0) -$ 1.0)
       ; bias2 = zeros dtype [| n |]
       ; b =
           Some
@@ -175,8 +191,8 @@ end
 (* {1 Gated nonlinear} *)
 
 module Gnode = struct
-  type 'a params =
-    { dt_over_tau : float [@ptree.skip]
+  type ('a, 'd) params =
+    { dt_over_tau : float
     ; g_a1 : 'a
     ; g_bias1 : 'a
     ; h_a1 : 'a
@@ -185,12 +201,23 @@ module Gnode = struct
     ; h_bias2 : 'a
     ; b : 'a option
     }
-  [@@deriving ptree]
+
+  let walk_params cur x =
+    let open Nx.Ptree.Walk in
+    let dt_over_tau = x.dt_over_tau in
+    let g_a1 = field cur "g_a1" leaf x.g_a1 in
+    let g_bias1 = field cur "g_bias1" leaf x.g_bias1 in
+    let h_a1 = field cur "h_a1" leaf x.h_a1 in
+    let h_a2 = field cur "h_a2" leaf x.h_a2 in
+    let h_bias1 = field cur "h_bias1" leaf x.h_bias1 in
+    let h_bias2 = field cur "h_bias2" leaf x.h_bias2 in
+    let b = field cur "b" (option leaf) x.b in
+    { dt_over_tau; g_a1; g_bias1; h_a1; h_a2; h_bias1; h_bias2; b }
 
   let structure () =
     Nx.Ptree.instantiate
       (module struct
-        type 'a t = 'a params
+        type ('a, 'd) t = ('a, 'd) params
 
         let walk = walk_params
       end)
@@ -241,19 +268,27 @@ end
 (* {1 Minimal gated unit} *)
 
 module Mgu = struct
-  type 'a params =
+  type ('a, 'd) params =
     { uf : 'a
     ; uh : 'a
     ; w : 'a
     ; bf : 'a
     ; bh : 'a
     }
-  [@@deriving ptree]
+
+  let walk_params cur x =
+    let open Nx.Ptree.Walk in
+    let uf = field cur "uf" leaf x.uf in
+    let uh = field cur "uh" leaf x.uh in
+    let w = field cur "w" leaf x.w in
+    let bf = field cur "bf" leaf x.bf in
+    let bh = field cur "bh" leaf x.bh in
+    { uf; uh; w; bf; bh }
 
   let structure () =
     Nx.Ptree.instantiate
       (module struct
-        type 'a t = 'a params
+        type ('a, 'd) t = ('a, 'd) params
 
         let walk = walk_params
       end)

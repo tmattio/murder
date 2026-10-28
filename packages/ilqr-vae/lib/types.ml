@@ -3,4 +3,4 @@
   SPDX-License-Identifier: ISC
   ---------------------------------------------------------------------------*)
 
-type 'w value = (float, 'w) Nx.t
+type ('w, 'd) value = (float, 'w, 'd) Nx.t

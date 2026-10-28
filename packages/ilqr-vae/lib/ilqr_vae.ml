@@ -15,9 +15,9 @@ module Recognition = Recognition
 module Model = Model
 module Elbo = Elbo
 
-type 'w value = (float, 'w) Nx.t
-type ('w, 'd, 'l, 'p, 'e, 'r) model = ('w, 'd, 'l, 'p, 'e, 'r) Model.t
-type ('w, 'd, 'l, 'p, 'e, 'r) params = ('w, 'd, 'l, 'p, 'e, 'r) Model.params
+type ('w, 'd) value = (float, 'w, 'd) Nx.t
+type ('w, 'y, 'l, 'p, 'e, 'r, 'd) model = ('w, 'y, 'l, 'p, 'e, 'r, 'd) Model.t
+type ('w, 'y, 'l, 'p, 'e, 'r, 'd) params = ('w, 'y, 'l, 'p, 'e, 'r, 'd) Model.params
 
 let posterior_mean = Model.mean
 let posterior_draws = Model.infer
@@ -32,21 +32,25 @@ let elbo model params ?beta ~posterior data =
 (* [integrate model params ~u] is the deterministic rollout from [x_0 = 0];
    [integrate_from model params ~x0 ~u] starts where the caller says. *)
 let integrate
-      (type w d l p e r)
-      (model : (w, d, l, p, e, r) Model.t)
-      (params : (w, d, l, p, e, r) Model.params)
+      (type w y l p e r)
+      (model : (w, y, l, p, e, r, 'd) Model.t)
+      (params : (w, y, l, p, e, r, 'd) Model.params)
       ~u
   =
   Dynamics.integrate
     model.Model.dynamics
     params.Model.dynamics
-    ~x0:(zeros model.Model.dtype [| model.Model.n |])
+    ~x0:
+      (zeros_at
+         (Nx.Placement.uncut (Nx.placement u))
+         model.Model.dtype
+         [| model.Model.n |])
     ~u
 
 let integrate_from
-      (type w d l p e r)
-      (model : (w, d, l, p, e, r) Model.t)
-      (params : (w, d, l, p, e, r) Model.params)
+      (type w y l p e r)
+      (model : (w, y, l, p, e, r, 'd) Model.t)
+      (params : (w, y, l, p, e, r, 'd) Model.params)
       ~x0
       ~u
   =
@@ -55,18 +59,18 @@ let integrate_from
 (* [decode model params z] is the likelihood's readout of a state sequence:
    observation [k] belongs to state [k + 1]. *)
 let decode
-      (type w d l p e r)
-      (model : (w, d, l, p, e, r) Model.t)
-      (params : (w, d, l, p, e, r) Model.params)
-      (z : w value)
+      (type w y l p e r)
+      (model : (w, y, l, p, e, r, 'd) Model.t)
+      (params : (w, y, l, p, e, r, 'd) Model.params)
+      (z : (w, 'd) value)
   =
   let z_next = slice [ R (1, model.Model.n_steps + 1) ] z in
   model.Model.likelihood.Likelihood.mean params.Model.likelihood z_next
 
 let sample_generative
-      (type w d l p e r)
-      (model : (w, d, l, p, e, r) Model.t)
-      (params : (w, d, l, p, e, r) Model.params)
+      (type w y l p e r)
+      (model : (w, y, l, p, e, r, 'd) Model.t)
+      (params : (w, y, l, p, e, r, 'd) Model.params)
       ~key
   =
   let keys = Nx.Rng.split ~n:3 key in
@@ -81,7 +85,8 @@ let sample_generative
   in
   let x0 =
     match params.Model.initial_prior with
-    | None -> zeros model.Model.dtype [| model.Model.n |]
+    | None ->
+      zeros_at (Nx.Placement.uncut (Nx.placement u)) model.Model.dtype [| model.Model.n |]
     | Some p -> reshape [| model.Model.n |] (Initial.sample p ~key:key_x0 ~n_samples:1)
   in
   let z = integrate_from model params ~x0 ~u in
@@ -94,10 +99,10 @@ let sample_generative
   x0, u, z, o
 
 let predictions
-      (type w d l p e r)
-      (model : (w, d, l, p, e, r) Model.t)
-      (params : (w, d, l, p, e, r) Model.params)
-      (posterior : w Recognition.posterior)
+      (type w y l p e r)
+      (model : (w, y, l, p, e, r, 'd) Model.t)
+      (params : (w, y, l, p, e, r, 'd) Model.params)
+      (posterior : (w, 'd) Recognition.posterior)
   =
   let z =
     integrate_from model params ~x0:posterior.Recognition.x0 ~u:posterior.Recognition.u
@@ -105,10 +110,10 @@ let predictions
   posterior.Recognition.u, z, decode model params z
 
 let predictions_deterministic
-      (type w d l p e r)
-      (model : (w, d, l, p, e, r) Model.t)
-      (params : (w, d, l, p, e, r) Model.params)
-      (samples : w Recognition.samples)
+      (type w y l p e r)
+      (model : (w, y, l, p, e, r, 'd) Model.t)
+      (params : (w, y, l, p, e, r, 'd) Model.params)
+      (samples : (w, 'd) Recognition.samples)
   =
   let z =
     integrate_from model params ~x0:samples.Recognition.x0 ~u:samples.Recognition.u

@@ -66,30 +66,30 @@ open Types
 
 (** The model description, all data: dimensions, components, the optional
     initial-state prior and the recognition. Build one with {!make}. *)
-type ('w, 'd, 'l, 'p, 'e, 'r) t =
+type ('w, 'y, 'l, 'p, 'e, 'r, 'd) t =
   { dtype : (float, 'w) Nx.dtype
   ; n : int (** state dimension *)
   ; m : int (** input dimension *)
   ; n_steps : int (** number of control steps and observations *)
   ; n_output : int (** observation dimension *)
-  ; dynamics : ('w, 'd) Dynamics.t
-  ; likelihood : ('w, 'l) Likelihood.t
-  ; prior : ('w, 'p) Prior.t (** the generative prior of the ELBO *)
-  ; encoder_prior : ('w, 'e) Prior.t (** the prior of the iLQR cost, [p̃] *)
-  ; initial_prior : 'w value Initial.params option
+  ; dynamics : ('w, 'y, 'd) Dynamics.t
+  ; likelihood : ('w, 'l, 'd) Likelihood.t
+  ; prior : ('w, 'p, 'd) Prior.t (** the generative prior of the ELBO *)
+  ; encoder_prior : ('w, 'e, 'd) Prior.t (** the prior of the iLQR cost, [p̃] *)
+  ; initial_prior : (('w, 'd) value, 'd) Initial.params option
     (** the prior over [x_0], present exactly when the recognition infers it *)
-  ; recognition : ('w, 'd, 'l, 'p, 'e, 'r) Recognition.t
+  ; recognition : ('w, 'y, 'l, 'p, 'e, 'r, 'd) Recognition.t
   }
 
 (** The parameters of a model: one value per component, in the component's own
     parameter type. {!structure} is the [Nx.Ptree.t] of this record, and this
     is the value a training loop holds and updates. *)
-type ('w, 'd, 'l, 'p, 'e, 'r) params =
-  { dynamics : 'd
+type ('w, 'y, 'l, 'p, 'e, 'r, 'd) params =
+  { dynamics : 'y
   ; likelihood : 'l
   ; prior : 'p
   ; encoder_prior : 'e
-  ; initial_prior : 'w value Initial.params option
+  ; initial_prior : (('w, 'd) value, 'd) Initial.params option
   ; recognition : 'r
   }
 
@@ -112,31 +112,37 @@ val make
   -> m:int
   -> n_steps:int
   -> n_output:int
-  -> dynamics:('w, 'd) Dynamics.t
-  -> likelihood:('w, 'l) Likelihood.t
-  -> prior:('w, 'p) Prior.t
-  -> encoder_prior:('w, 'e) Prior.t
-  -> recognition:('w, 'd, 'l, 'p, 'e, 'r) Recognition.t
-  -> ?initial_prior:'w value Initial.params
+  -> dynamics:('w, 'y, 'd) Dynamics.t
+  -> likelihood:('w, 'l, 'd) Likelihood.t
+  -> prior:('w, 'p, 'd) Prior.t
+  -> encoder_prior:('w, 'e, 'd) Prior.t
+  -> recognition:('w, 'y, 'l, 'p, 'e, 'r, 'd) Recognition.t
+  -> ?initial_prior:(('w, 'd) value, 'd) Initial.params
   -> unit
-  -> ('w, 'd, 'l, 'p, 'e, 'r) t
+  -> ('w, 'y, 'l, 'p, 'e, 'r, 'd) t
 
 (** [init model] collects the components' initial parameters: the value a
     training run starts from. Deterministic — the randomness was spent when
     the components were built. *)
-val init : ('w, 'd, 'l, 'p, 'e, 'r) t -> ('w, 'd, 'l, 'p, 'e, 'r) params
+val init : ('w, 'y, 'l, 'p, 'e, 'r, 'd) t -> ('w, 'y, 'l, 'p, 'e, 'r, 'd) params
 
 (** [structure model] is the structure of {!init}'s value, assembled from the
     components' structures: paths read ["dynamics.a1"],
     ["likelihood.log_variances"], ["recognition.ic_fwd.uf"] and so on. This
     is the structure {!Rune.grad}, {!Rune.jit} and {!Vega} take. *)
-val structure : ('w, 'd, 'l, 'p, 'e, 'r) t -> ('w, 'd, 'l, 'p, 'e, 'r) params Nx.Ptree.t
+val structure
+  :  ('w, 'y, 'l, 'p, 'e, 'r, 'd) t
+  -> (('w, 'y, 'l, 'p, 'e, 'r, 'd) params, 'd) Nx.Ptree.t
 
 (** [generative model] is the view of the model a recognition reads. *)
-val generative : ('w, 'd, 'l, 'p, 'e, 'r) t -> ('w, 'd, 'l, 'p, 'e) Recognition.generative
+val generative
+  :  ('w, 'y, 'l, 'p, 'e, 'r, 'd) t
+  -> ('w, 'y, 'l, 'p, 'e, 'd) Recognition.generative
 
 (** [gparams params] is the matching view of the parameters. *)
-val gparams : ('w, 'd, 'l, 'p, 'e, 'r) params -> ('w, 'd, 'l, 'p, 'e) Recognition.gparams
+val gparams
+  :  ('w, 'y, 'l, 'p, 'e, 'r, 'd) params
+  -> ('w, 'y, 'l, 'p, 'e) Recognition.gparams
 
 (** [infer model params ~n_samples ~key data] draws [n_samples] latent
     trajectories from the model's recognition distribution and evaluates
@@ -144,29 +150,29 @@ val gparams : ('w, 'd, 'l, 'p, 'e, 'r) params -> ('w, 'd, 'l, 'p, 'e) Recognitio
     recognition's solver hint: [Some n] for [n] fixed iLQR iterations
     (traceable), [None] for the default complete solve; LFADS ignores it. *)
 val infer
-  :  ('w, 'd, 'l, 'p, 'e, 'r) t
-  -> ('w, 'd, 'l, 'p, 'e, 'r) params
+  :  ('w, 'y, 'l, 'p, 'e, 'r, 'd) t
+  -> ('w, 'y, 'l, 'p, 'e, 'r, 'd) params
   -> ?iters:int
   -> n_samples:int
-  -> key:Nx.Rng.t
-  -> 'w value
-  -> 'w Recognition.posterior
+  -> key:'d Nx.Rng.key
+  -> ('w, 'd) value
+  -> ('w, 'd) Recognition.posterior
 
 (** [mean model params data] is the recognition's posterior mean, a single
     deterministic latent trajectory. See {!Recognition.mean}. *)
 val mean
-  :  ('w, 'd, 'l, 'p, 'e, 'r) t
-  -> ('w, 'd, 'l, 'p, 'e, 'r) params
+  :  ('w, 'y, 'l, 'p, 'e, 'r, 'd) t
+  -> ('w, 'y, 'l, 'p, 'e, 'r, 'd) params
   -> ?iters:int
-  -> 'w value
-  -> 'w Recognition.samples
+  -> ('w, 'd) value
+  -> ('w, 'd) Recognition.samples
 
 (** [log_prob model params data samples] is [log q(samples | data)] for given
     latents. See {!Recognition.log_prob}. *)
 val log_prob
-  :  ('w, 'd, 'l, 'p, 'e, 'r) t
-  -> ('w, 'd, 'l, 'p, 'e, 'r) params
+  :  ('w, 'y, 'l, 'p, 'e, 'r, 'd) t
+  -> ('w, 'y, 'l, 'p, 'e, 'r, 'd) params
   -> ?iters:int
-  -> 'w value
-  -> 'w Recognition.samples
-  -> 'w value
+  -> ('w, 'd) value
+  -> ('w, 'd) Recognition.samples
+  -> ('w, 'd) value

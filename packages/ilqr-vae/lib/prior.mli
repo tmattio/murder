@@ -22,19 +22,23 @@
 
 open Types
 
-type ('w, 'p) t =
+type ('w, 'p, 'd) t =
   { m : int (** input dimension *)
-  ; structure : 'p Nx.Ptree.t (** the structure of the prior's parameters *)
+  ; structure : ('p, 'd) Nx.Ptree.t (** the structure of the prior's parameters *)
   ; params : 'p (** the parameters a fresh model starts from *)
-  ; logp_t : 'p -> k:'w value -> u:'w value -> 'w value
+  ; logp_t : 'p -> k:('w, 'd) value -> u:('w, 'd) value -> ('w, 'd) value
     (** [logp_t p ~k ~u] is log p(u_k). [u] is one input row, of shape [[m]]
         or a batch [[batch…; m]]; the result is a scalar tensor, or one value
         per row. *)
-  ; sample : 'p -> key:Nx.Rng.t -> n_steps:int -> 'w value
+  ; sample : 'p -> key:'d Nx.Rng.key -> n_steps:int -> ('w, 'd) value
     (** [sample p ~key ~n_steps] draws one input sequence, of shape
         [[n_steps; m]]. *)
   ; kl_to_gaussian :
-      ('p -> mu:'w value -> space_factor:'w value -> time_factor:'w value -> 'w value)
+      ('p
+       -> mu:('w, 'd) value
+       -> space_factor:('w, 'd) value
+       -> time_factor:('w, 'd) value
+       -> ('w, 'd) value)
         option
     (** [Some kl] exactly when the prior is Gaussian;
         [kl p ~mu ~space_factor ~time_factor] is the exact KL [KL(q ‖ p)] for
@@ -61,18 +65,22 @@ type ('w, 'p) t =
 module Gaussian : sig
   (** The parameters of a Gaussian prior over payload ['a]. {!structure}
       gives their [Nx.Ptree.t]. *)
-  type 'a params =
+  type ('a, 'd) params =
     { log_spatial_stds : 'a (** [[m]] *)
     ; log_first_bin : 'a (** a scalar, [()] *)
     }
-  [@@deriving ptree]
+
+  val walk_params
+    :  ('a, 'b, 'd, 'e) Nx.Ptree.Walk.cursor
+    -> ('a, 'd) params
+    -> ('b, 'e) params
 
   (** [structure ()] is the [Nx.Ptree.t] of [params]. It is a function, not a
       value, so that it stays polymorphic in the dtype: call it where the
       structure is used. A top-level [let s = structure ()] would pin it to
       the first dtype, as any application does; write [let s () = structure ()]
       instead. *)
-  val structure : unit -> ('a, 'b) Nx.t params Nx.Ptree.t
+  val structure : unit -> ((('a, 'b, 'd) Nx.t, 'd) params, 'd) Nx.Ptree.t
 
   (** [make ~spatial_std ~first_bin ~m dtype] is a Gaussian prior over [[m]]
       dimensional inputs whose scales all start at [spatial_std], and whose
@@ -85,14 +93,22 @@ module Gaussian : sig
     -> ?first_bin:float
     -> m:int
     -> (float, 'w) Nx.dtype
-    -> ('w, (float, 'w) Nx.t params) t
+    -> ('w, ((float, 'w, Nx.host) Nx.t, Nx.host) params, Nx.host) t
 
   (** The per-step log density of {!make}; the function the prior's
       [logp_t] is. *)
-  val logp_t : (float, 'w) Nx.t params -> k:'w value -> u:'w value -> 'w value
+  val logp_t
+    :  ((float, 'w, 'd) Nx.t, 'd) params
+    -> k:('w, 'd) value
+    -> u:('w, 'd) value
+    -> ('w, 'd) value
 
   (** The sampler of {!make}: one sequence, [[n_steps; m]]. *)
-  val sample : (float, 'w) Nx.t params -> key:Nx.Rng.t -> n_steps:int -> 'w value
+  val sample
+    :  ((float, 'w, 'd) Nx.t, 'd) params
+    -> key:'d Nx.Rng.key
+    -> n_steps:int
+    -> ('w, 'd) value
 
   (** The exact [KL(q ‖ p)]: with [q = N(mu, Σ_time ⊗ Σ_space)] and a
       factorized Gaussian [p],
@@ -104,11 +120,11 @@ module Gaussian : sig
       computed from the two Cholesky factors of [Σ_q] and the prior's scales,
       in [O(T·m)] tensor operations. *)
   val kl_to_gaussian
-    :  (float, 'w) Nx.t params
-    -> mu:'w value
-    -> space_factor:'w value
-    -> time_factor:'w value
-    -> 'w value
+    :  ((float, 'w, 'd) Nx.t, 'd) params
+    -> mu:('w, 'd) value
+    -> space_factor:('w, 'd) value
+    -> time_factor:('w, 'd) value
+    -> ('w, 'd) value
 end
 
 (** {1:student Student-t} *)
@@ -131,19 +147,23 @@ end
 module Student : sig
   (** The parameters of a Student-t prior over payload ['a]. {!structure}
       gives their [Nx.Ptree.t]. *)
-  type 'a params =
+  type ('a, 'd) params =
     { log_spatial_stds : 'a (** [[m]] *)
     ; log_nu_minus_two : 'a (** a scalar, [()] *)
     ; log_first_stds : 'a (** [[m]], the Gaussian first step *)
     }
-  [@@deriving ptree]
+
+  val walk_params
+    :  ('a, 'b, 'd, 'e) Nx.Ptree.Walk.cursor
+    -> ('a, 'd) params
+    -> ('b, 'e) params
 
   (** [structure ()] is the [Nx.Ptree.t] of [params]. It is a function, not a
       value, so that it stays polymorphic in the dtype: call it where the
       structure is used. A top-level [let s = structure ()] would pin it to
       the first dtype, as any application does; write [let s () = structure ()]
       instead. *)
-  val structure : unit -> ('a, 'b) Nx.t params Nx.Ptree.t
+  val structure : unit -> ((('a, 'b, 'd) Nx.t, 'd) params, 'd) Nx.Ptree.t
 
   (** [make ~spatial_std ~nu ~first_std ~m dtype] is a Student-t prior over
       [[m]] dimensional inputs with degrees of freedom [nu], scales [spatial_std]
@@ -157,12 +177,20 @@ module Student : sig
     -> ?first_std:float
     -> m:int
     -> (float, 'w) Nx.dtype
-    -> ('w, (float, 'w) Nx.t params) t
+    -> ('w, ((float, 'w, Nx.host) Nx.t, Nx.host) params, Nx.host) t
 
   (** The per-step log density and the sampler of {!make}. *)
-  val logp_t : (float, 'w) Nx.t params -> k:'w value -> u:'w value -> 'w value
+  val logp_t
+    :  ((float, 'w, 'd) Nx.t, 'd) params
+    -> k:('w, 'd) value
+    -> u:('w, 'd) value
+    -> ('w, 'd) value
 
-  val sample : (float, 'w) Nx.t params -> key:Nx.Rng.t -> n_steps:int -> 'w value
+  val sample
+    :  ((float, 'w, 'd) Nx.t, 'd) params
+    -> key:'d Nx.Rng.key
+    -> n_steps:int
+    -> ('w, 'd) value
 end
 
 (** {1:laplacian Laplacian} *)
@@ -178,18 +206,22 @@ end
 module Laplacian : sig
   (** The parameters of a Laplacian prior over payload ['a]. {!structure}
       gives their [Nx.Ptree.t]. *)
-  type 'a params =
+  type ('a, 'd) params =
     { log_spatial_stds : 'a (** [[m]] *)
     ; log_first_stds : 'a (** [[m]], the Gaussian first step *)
     }
-  [@@deriving ptree]
+
+  val walk_params
+    :  ('a, 'b, 'd, 'e) Nx.Ptree.Walk.cursor
+    -> ('a, 'd) params
+    -> ('b, 'e) params
 
   (** [structure ()] is the [Nx.Ptree.t] of [params]. It is a function, not a
       value, so that it stays polymorphic in the dtype: call it where the
       structure is used. A top-level [let s = structure ()] would pin it to
       the first dtype, as any application does; write [let s () = structure ()]
       instead. *)
-  val structure : unit -> ('a, 'b) Nx.t params Nx.Ptree.t
+  val structure : unit -> ((('a, 'b, 'd) Nx.t, 'd) params, 'd) Nx.Ptree.t
 
   (** [make ~spatial_std ~first_std ~m dtype] is a Laplacian prior over [[m]]
       dimensional inputs with scales [spatial_std] and a first step with
@@ -202,10 +234,18 @@ module Laplacian : sig
     -> ?first_std:float
     -> m:int
     -> (float, 'w) Nx.dtype
-    -> ('w, (float, 'w) Nx.t params) t
+    -> ('w, ((float, 'w, Nx.host) Nx.t, Nx.host) params, Nx.host) t
 
   (** The per-step log density and the sampler of {!make}. *)
-  val logp_t : (float, 'w) Nx.t params -> k:'w value -> u:'w value -> 'w value
+  val logp_t
+    :  ((float, 'w, 'd) Nx.t, 'd) params
+    -> k:('w, 'd) value
+    -> u:('w, 'd) value
+    -> ('w, 'd) value
 
-  val sample : (float, 'w) Nx.t params -> key:Nx.Rng.t -> n_steps:int -> 'w value
+  val sample
+    :  ((float, 'w, 'd) Nx.t, 'd) params
+    -> key:'d Nx.Rng.key
+    -> n_steps:int
+    -> ('w, 'd) value
 end

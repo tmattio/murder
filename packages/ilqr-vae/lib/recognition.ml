@@ -48,23 +48,23 @@ open Types
 (** The generative model as a recognition sees it: the dimensions, the
     dynamics, the likelihood and the priors. A subset of {!Model.t}, built by
     {!Model.generative}, so that this module does not depend on the model. *)
-type ('w, 'd, 'l, 'p, 'e) generative =
+type ('w, 'y, 'l, 'p, 'e, 'd) generative =
   { dtype : (float, 'w) Nx.dtype
   ; n : int
   ; m : int
   ; n_steps : int
   ; n_output : int
-  ; dynamics : ('w, 'd) Dynamics.t
-  ; likelihood : ('w, 'l) Likelihood.t
-  ; prior : ('w, 'p) Prior.t (** the generative prior over inputs *)
-  ; encoder_prior : ('w, 'e) Prior.t (** the prior of the iLQR cost, [p̃] *)
+  ; dynamics : ('w, 'y, 'd) Dynamics.t
+  ; likelihood : ('w, 'l, 'd) Likelihood.t
+  ; prior : ('w, 'p, 'd) Prior.t (** the generative prior over inputs *)
+  ; encoder_prior : ('w, 'e, 'd) Prior.t (** the prior of the iLQR cost, [p̃] *)
   }
 
 (** The corresponding parameters, a subset of {!Model.params}. The type
     parameter ['w] is phantom; it keeps the shape of the type parallel to
     {!type-generative}. *)
-type ('w, 'd, 'l, 'p, 'e) gparams =
-  { dynamics : 'd
+type ('w, 'y, 'l, 'p, 'e) gparams =
+  { dynamics : 'y
   ; likelihood : 'l
   ; prior : 'p
   ; encoder_prior : 'e
@@ -72,17 +72,17 @@ type ('w, 'd, 'l, 'p, 'e) gparams =
 
 (** One reparameterized draw of a trial's latents: the initial state, of shape
     [[n_samples; n]], and the inputs, of shape [[n_steps; n_samples; m]]. *)
-type 'w samples =
-  { x0 : 'w value
-  ; u : 'w value
+type ('w, 'd) samples =
+  { x0 : ('w, 'd) value
+  ; u : ('w, 'd) value
   }
 
 (** A draw together with the value of [log q] at it, of shape
     [[n_samples]] — one scalar per draw. This is what {!Elbo} consumes. *)
-type 'w posterior =
-  { x0 : 'w value
-  ; u : 'w value
-  ; log_prob : 'w value
+type ('w, 'd) posterior =
+  { x0 : ('w, 'd) value
+  ; u : ('w, 'd) value
+  ; log_prob : ('w, 'd) value
   }
 
 (** The dimensions a recognition is built for, checked against the model's by
@@ -98,46 +98,46 @@ type dims =
     {!field-name} and {!field-infers_initial} is a function of the current
     parameters, the way the constructors of {!Dynamics}, {!Prior} and
     {!Likelihood} are. *)
-type ('w, 'd, 'l, 'p, 'e, 'r) t =
+type ('w, 'y, 'l, 'p, 'e, 'r, 'd) t =
   { dims : dims
   ; infers_initial : bool
     (** [true] when [q] carries an initial-state factor, so that
         {!Model.make} can require a matching initial-state prior. *)
   ; name : string (** for diagnostics *)
-  ; structure : 'r Nx.Ptree.t (** the structure of the parameters *)
+  ; structure : ('r, 'd) Nx.Ptree.t (** the structure of the parameters *)
   ; params : 'r (** the parameters a fresh model starts from *)
   ; infer :
-      ('w, 'd, 'l, 'p, 'e) generative
-      -> ('w, 'd, 'l, 'p, 'e) gparams
+      ('w, 'y, 'l, 'p, 'e, 'd) generative
+      -> ('w, 'y, 'l, 'p, 'e) gparams
       -> params:'r
       -> ?iters:int
       -> n_samples:int
-      -> key:Nx.Rng.t
-      -> 'w value
-      -> 'w posterior
+      -> key:'d Nx.Rng.key
+      -> ('w, 'd) value
+      -> ('w, 'd) posterior
     (** [infer gen gp ~params ~n_samples ~key data] draws [n_samples] latent
         trajectories from [q(· | data)] and evaluates [log q] at each of them.
         [iters] is a hint for recognitions with an iterative inner solver:
         [Some n] asks for [n] fixed iterations (traceable), [None] for the
         default complete solve. Recognitions without one ignore it. *)
   ; mean :
-      ('w, 'd, 'l, 'p, 'e) generative
-      -> ('w, 'd, 'l, 'p, 'e) gparams
+      ('w, 'y, 'l, 'p, 'e, 'd) generative
+      -> ('w, 'y, 'l, 'p, 'e) gparams
       -> params:'r
       -> ?iters:int
-      -> 'w value
-      -> 'w samples
+      -> ('w, 'd) value
+      -> ('w, 'd) samples
     (** [mean gen gp ~params data] is the posterior mean — a single
         deterministic latent trajectory, shaped like one member of a sample
         batch ([n_samples = 1]). *)
   ; log_prob :
-      ('w, 'd, 'l, 'p, 'e) generative
-      -> ('w, 'd, 'l, 'p, 'e) gparams
+      ('w, 'y, 'l, 'p, 'e, 'd) generative
+      -> ('w, 'y, 'l, 'p, 'e) gparams
       -> params:'r
       -> ?iters:int
-      -> 'w value
-      -> 'w samples
-      -> 'w value
+      -> ('w, 'd) value
+      -> ('w, 'd) samples
+      -> ('w, 'd) value
     (** [log_prob gen gp ~params data s] is [log q(s | data)], summed over
         the latents: one value per member of a batch. *)
   }
@@ -145,28 +145,33 @@ type ('w, 'd, 'l, 'p, 'e, 'r) t =
 (* {1 Helpers} *)
 
 let log_2pi = Float.log (2.0 *. Float.pi)
-let infer (type w d l p e r) (recog : (w, d, l, p, e, r) t) = recog.infer
-let mean (type w d l p e r) (recog : (w, d, l, p, e, r) t) = recog.mean
-let log_prob (type w d l p e r) (recog : (w, d, l, p, e, r) t) = recog.log_prob
+let infer (type w y l p e r) (recog : (w, y, l, p, e, r, 'd) t) = recog.infer
+let mean (type w y l p e r) (recog : (w, y, l, p, e, r, 'd) t) = recog.mean
+let log_prob (type w y l p e r) (recog : (w, y, l, p, e, r, 'd) t) = recog.log_prob
 
 (** [gparams_structure gen] is the [Nx.Ptree.t] of {!type-gparams} at [gen]:
     the same structure the model gives its own parameters, with only the
     paths a recognition reads. *)
-let gparams_structure (type w d l p e) (gen : (w, d, l, p, e) generative)
-  : (w, d, l, p, e) gparams Nx.Ptree.t
+let gparams_structure (type w y l p e) (gen : (w, y, l, p, e, 'd) generative)
+  : ((w, y, l, p, e) gparams, 'd) Nx.Ptree.t
   =
-  Nx.Ptree.iso
-    (fun (d, (l, (p, e))) ->
-       { dynamics = d; likelihood = l; prior = p; encoder_prior = e })
-    (fun r -> r.dynamics, (r.likelihood, (r.prior, r.encoder_prior)))
-    Nx.Ptree.(
-      pair
-        (field "dynamics" gen.dynamics.Dynamics.structure)
-        (pair
-           (field "likelihood" gen.likelihood.Likelihood.structure)
-           (pair
-              (field "prior" gen.prior.Prior.structure)
-              (field "encoder_prior" gen.encoder_prior.Prior.structure))))
+  Nx.Ptree.v (fun c r ->
+    let open Nx.Ptree.Walk in
+    let dynamics =
+      field c "dynamics" (structure gen.dynamics.Dynamics.structure) r.dynamics
+    in
+    let likelihood =
+      field c "likelihood" (structure gen.likelihood.Likelihood.structure) r.likelihood
+    in
+    let prior = field c "prior" (structure gen.prior.Prior.structure) r.prior in
+    let encoder_prior =
+      field
+        c
+        "encoder_prior"
+        (structure gen.encoder_prior.Prior.structure)
+        r.encoder_prior
+    in
+    { dynamics; likelihood; prior; encoder_prior })
 
 let check_data ~n_steps ~n_output data =
   let shape = Nx.shape data in
@@ -179,13 +184,7 @@ let check_data ~n_steps ~n_output data =
 (* [scaled_randn ?key ~sigma dtype shape] is a normal draw of standard
    deviation [sigma], from [key] when given and from the current random scope
    otherwise. *)
-let scaled_randn ?key ~sigma dtype shape =
-  let draw =
-    match key with
-    | Some key -> Nx.Rng.normal key dtype shape
-    | None -> randn dtype shape
-  in
-  Infix.(draw *$ sigma)
+let scaled_randn ?key ~sigma dtype shape = Infix.(Nx.Rng.normal ?key dtype shape *$ sigma)
 
 (* [split2 ~axis t] splits [t] into two equal halves along [axis]. The
    readouts below always emit a mean and a log-variance head side by side. *)
@@ -208,16 +207,21 @@ let gaussian_logp ~x ~mu ~logvar =
     factor over time and a factor over input dimensions. The initial state is
     fixed at zero, so {!Model} is built without an initial-state prior. *)
 module Iilqr = struct
-  type 'a params =
-    { space_cov : 'a Covariance.params (** the factor over input dimensions *)
-    ; time_cov : 'a Covariance.params (** the factor over the horizon *)
+  type ('a, 'd) params =
+    { space_cov : ('a, 'd) Covariance.params (** the factor over input dimensions *)
+    ; time_cov : ('a, 'd) Covariance.params (** the factor over the horizon *)
     }
-  [@@deriving ptree]
+
+  let walk_params cur x =
+    let open Nx.Ptree.Walk in
+    let space_cov = field cur "space_cov" Covariance.walk_params x.space_cov in
+    let time_cov = field cur "time_cov" Covariance.walk_params x.time_cov in
+    { space_cov; time_cov }
 
   let structure () =
     Nx.Ptree.instantiate
       (module struct
-        type 'a t = 'a params
+        type ('a, 'd) t = ('a, 'd) params
 
         let walk = walk_params
       end)
@@ -238,12 +242,12 @@ module Iilqr = struct
 
   (* [controls_of gen tau] is the control part of a stacked trajectory: rows
      [0 … n_steps − 1], columns [n … n + m − 1]. *)
-  let controls_of (type w) (gen : (w, _, _, _, _) generative) (tau : w value) =
+  let controls_of (type w) (gen : (w, _, _, _, _, 'd) generative) (tau : (w, 'd) value) =
     slice [ R (0, gen.n_steps); R (gen.n, gen.n + gen.m) ] tau
 
-  let initial_controls (type w) (gen : (w, _, _, _, _) generative) u_init =
+  let initial_controls (type w) (gen : (w, _, _, _, _, 'd) generative) ~at u_init =
     match u_init with
-    | None -> Array.init gen.n_steps ~f:(fun _ -> zeros gen.dtype [| gen.m |])
+    | None -> Array.init gen.n_steps ~f:(fun _ -> zeros_at at gen.dtype [| gen.m |])
     | Some u ->
       if
         Array.length (Nx.shape u) <> 2
@@ -260,11 +264,11 @@ module Iilqr = struct
       share of the model's, so {!Dilqr} differentiates the solve with respect
       to the dynamics, the likelihood and the encoder prior. *)
   let problem
-        (type w d l p e)
-        (gen : (w, d, l, p, e) generative)
-        (_gp : (w, d, l, p, e) gparams)
-        (data : w value)
-    : (w, (w, d, l, p, e) gparams) Dilqr.Problem.t
+        (type w y l p e)
+        (gen : (w, y, l, p, e, 'd) generative)
+        (_gp : (w, y, l, p, e) gparams)
+        (data : (w, 'd) value)
+    : (w, (w, y, l, p, e) gparams, 'd) Dilqr.Problem.t
     =
     let n = gen.n
     and m = gen.m
@@ -272,8 +276,8 @@ module Iilqr = struct
     and n_output = gen.n_output
     and dtype = gen.dtype in
     check_data ~n_steps:t_steps ~n_output data;
-    let zero = scalar dtype 0.0
-    and one = scalar dtype 1.0 in
+    let zero = scalar_like data 0.0
+    and one = scalar_like data 1.0 in
     let last = get [ t_steps - 1 ] data in
     (* The running loss at step [k] carries the encoder prior on [u_k] and —
        from step 1 on — the likelihood of [o_{k−1}] at [x_k]; the terminal
@@ -281,10 +285,10 @@ module Iilqr = struct
        index with [Nx.take], clamped so that step 0 reads a valid row and is
        then masked out. *)
     let running_loss
-          (theta : (w, d, l, p, e) gparams)
-          ~(k : w value)
-          ~(x : w value)
-          ~(u : w value)
+          (theta : (w, y, l, p, e) gparams)
+          ~(k : (w, 'd) value)
+          ~(x : (w, 'd) value)
+          ~(u : (w, 'd) value)
       =
       let prior_term =
         Infix.(-gen.encoder_prior.Prior.logp_t theta.encoder_prior ~k ~u)
@@ -292,17 +296,17 @@ module Iilqr = struct
       let index = maximum Infix.(k - one) zero in
       (* [take] with a 0-d [indices] removes the axis, so the row is
          [n_output]. *)
-      let o = take ~axis:0 ~indices:(cast int64 index) data in
+      let o = take ~axis:0 (cast int64 index) data in
       let likelihood_term =
         Infix.(-gen.likelihood.Likelihood.logp_t theta.likelihood ~k ~x ~o)
       in
       Infix.(prior_term + where (Nx.equal k zero) zero likelihood_term)
     in
-    let final_loss (theta : (w, d, l, p, e) gparams) ~(x : w value) =
+    let final_loss (theta : (w, y, l, p, e) gparams) ~(x : (w, 'd) value) =
       neg
         (gen.likelihood.Likelihood.logp_t
            theta.likelihood
-           ~k:(scalar dtype (Float.of_int t_steps))
+           ~k:(scalar_like data (Float.of_int t_steps))
            ~x
            ~o:last)
     in
@@ -324,8 +328,12 @@ module Iilqr = struct
       depend on it. Eager only. *)
   let posterior_mean gen gp ?u_init ?max_iter ?conv_threshold data =
     let p = problem gen gp data in
+    let at = Nx.Placement.uncut (Nx.placement data) in
     let inputs : (_, _) Dilqr.Problem.Inputs.t =
-      { theta = gp; x0 = zeros gen.dtype [| gen.n |]; us0 = initial_controls gen u_init }
+      { theta = gp
+      ; x0 = zeros_at at gen.dtype [| gen.n |]
+      ; us0 = initial_controls gen ~at u_init
+      }
     in
     controls_of gen (Dilqr.solve_adaptive p ?max_iter ?conv_threshold inputs)
 
@@ -334,8 +342,12 @@ module Iilqr = struct
       traceable and JIT-compilable together with its implicit VJP. *)
   let posterior_mean_fixed gen gp ?u_init ~iters ?alphas ?mu ?c1 data =
     let p = problem gen gp data in
+    let at = Nx.Placement.uncut (Nx.placement data) in
     let inputs : (_, _) Dilqr.Problem.Inputs.t =
-      { theta = gp; x0 = zeros gen.dtype [| gen.n |]; us0 = initial_controls gen u_init }
+      { theta = gp
+      ; x0 = zeros_at at gen.dtype [| gen.n |]
+      ; us0 = initial_controls gen ~at u_init
+      }
     in
     controls_of gen (Dilqr.solve_fixed p ~iters ?alphas ?mu ?c1 inputs)
 
@@ -344,8 +356,8 @@ module Iilqr = struct
      [Σ_time ⊗ Σ_space]. *)
   let sample_u
         (type w)
-        (gen : (w, _, _, _, _) generative)
-        (p : w value params)
+        (gen : (w, _, _, _, _, 'd) generative)
+        (p : ((w, 'd) value, 'd) params)
         ~mu
         ~n_samples
         ~key
@@ -356,7 +368,8 @@ module Iilqr = struct
     and m = gen.m in
     let l_time = Covariance.factor p.time_cov in
     let l_space = Covariance.factor p.space_cov in
-    let xi = Nx.Rng.normal key gen.dtype [| t_steps; n_samples; m |] in
+    let at = Nx.Placement.uncut (Nx.placement l_time) in
+    let xi = Nx.Rng.normal_at at ~key gen.dtype [| t_steps; n_samples; m |] in
     let cols = n_samples * m in
     let along_time = Infix.(l_time *@ reshape [| t_steps; cols |] xi) in
     let noise =
@@ -368,10 +381,15 @@ module Iilqr = struct
      [[n_steps; m]], or one value per sequence for a batch
      [[n_steps; batch…; m]]. The quadratic form is evaluated with two
      triangular solves against the Cholesky factors. *)
-  let log_prob_u (type w) (gen : (w, _, _, _, _) generative) (p : w value params) ~mu u =
+  let log_prob_u
+        (type w)
+        (gen : (w, _, _, _, _, 'd) generative)
+        (p : ((w, 'd) value, 'd) params)
+        ~mu
+        u
+    =
     let t_steps = gen.n_steps
-    and m = gen.m
-    and dtype = gen.dtype in
+    and m = gen.m in
     let shape = Nx.shape u in
     let rank = Array.length shape in
     if not (Int.equal shape.(0) t_steps && Int.equal shape.(rank - 1) m)
@@ -390,10 +408,10 @@ module Iilqr = struct
     (* [(u − μ)ᵀ Σ⁻¹ (u − μ) = ‖L_time⁻¹ (u − μ) L_space⁻ᵀ‖²_F], two triangular
        solves: one down the time axis, one down the input axis. *)
     let along_time = reshape [| t_steps; batch * m |] diff in
-    let solved_time = solve_triangular ~upper:true l_time along_time in
+    let solved_time = solve_triangular ~triangle:Upper l_time along_time in
     let rows = reshape [| t_steps * batch; m |] solved_time in
     let solved_space =
-      matrix_transpose (solve_triangular ~upper:true l_space (matrix_transpose rows))
+      matrix_transpose (solve_triangular ~triangle:Upper l_space (matrix_transpose rows))
     in
     let quadratic =
       reshape
@@ -407,12 +425,12 @@ module Iilqr = struct
         + (Covariance.log_det p.space_cov *$ Float.of_int t_steps))
     in
     let dim = Float.of_int (t_steps * m) in
-    Infix.((quadratic + (log_det + scalar dtype (dim *. log_2pi))) *$ -0.5)
+    Infix.((quadratic + (log_det +$ (dim *. log_2pi))) *$ -0.5)
 
   let solve
-        (type w d l p e)
-        (gen : (w, d, l, p, e) generative)
-        (gp : (w, d, l, p, e) gparams)
+        (type w y l p e)
+        (gen : (w, y, l, p, e, 'd) generative)
+        (gp : (w, y, l, p, e) gparams)
         ?iters
         data
     =
@@ -424,7 +442,7 @@ module Iilqr = struct
      density of [infer] is evaluated at it, so that the gradient of the bound
      reaches the recognition only through the sampled latents: the
      path-derivative (sticking-the-landing) estimator of the KL gradient. *)
-  let stopped (type w) (params : w value params) : w value params =
+  let stopped (type w) (params : ((w, 'd) value, 'd) params) : ((w, 'd) value, 'd) params =
     { space_cov =
         { Covariance.d = Rune.detach params.space_cov.d
         ; Covariance.t = Rune.detach params.space_cov.t
@@ -436,10 +454,10 @@ module Iilqr = struct
     }
 
   let infer
-        (type w d l p e)
-        (gen : (w, d, l, p, e) generative)
-        (gp : (w, d, l, p, e) gparams)
-        ~(params : w value params)
+        (type w y l p e)
+        (gen : (w, y, l, p, e, 'd) generative)
+        (gp : (w, y, l, p, e) gparams)
+        ~(params : ((w, 'd) value, 'd) params)
         ?iters
         ~n_samples
         ~key
@@ -447,34 +465,37 @@ module Iilqr = struct
     =
     check_data ~n_steps:gen.n_steps ~n_output:gen.n_output data;
     let mu_u = solve gen gp ?iters data in
-    let x0 = zeros gen.dtype [| gen.n |] in
+    let x0 = zeros_at (Nx.Placement.uncut (Nx.placement data)) gen.dtype [| gen.n |] in
     let u = sample_u gen params ~mu:mu_u ~n_samples ~key in
     let log_prob = log_prob_u gen (stopped params) ~mu:(Rune.detach mu_u) u in
     { x0 = broadcast_to [| n_samples; gen.n |] x0; u; log_prob }
 
   let mean
-        (type w d l p e)
-        (gen : (w, d, l, p, e) generative)
-        (gp : (w, d, l, p, e) gparams)
-        ~(params : w value params)
+        (type w y l p e)
+        (gen : (w, y, l, p, e, 'd) generative)
+        (gp : (w, y, l, p, e) gparams)
+        ~(params : ((w, 'd) value, 'd) params)
         ?iters
         data
     =
     let _ = params in
     check_data ~n_steps:gen.n_steps ~n_output:gen.n_output data;
     let mu_u = solve gen gp ?iters data in
-    { x0 = reshape [| 1; gen.n |] (zeros gen.dtype [| gen.n |])
+    { x0 =
+        reshape
+          [| 1; gen.n |]
+          (zeros_at (Nx.Placement.uncut (Nx.placement data)) gen.dtype [| gen.n |])
     ; u = reshape [| gen.n_steps; 1; gen.m |] mu_u
     }
 
   let log_prob
-        (type w d l p e)
-        (gen : (w, d, l, p, e) generative)
-        (gp : (w, d, l, p, e) gparams)
-        ~(params : w value params)
+        (type w y l p e)
+        (gen : (w, y, l, p, e, 'd) generative)
+        (gp : (w, y, l, p, e) gparams)
+        ~(params : ((w, 'd) value, 'd) params)
         ?iters
         data
-        (samples : w samples)
+        (samples : (w, 'd) samples)
     =
     check_data ~n_steps:gen.n_steps ~n_output:gen.n_output data;
     let mu_u = solve gen gp ?iters data in
@@ -536,12 +557,12 @@ end
     as the paper's references do, and the input readout is initialized small
     so that the posterior starts close to the model's input prior. *)
 module Lfads = struct
-  type 'a params =
-    { ic_fwd : 'a Dynamics.Mgu.params (** initial-condition encoder, forward *)
-    ; ic_bwd : 'a Dynamics.Mgu.params (** initial-condition encoder, backward *)
-    ; ci_fwd : 'a Dynamics.Mgu.params (** controller-input encoder, forward *)
-    ; ci_bwd : 'a Dynamics.Mgu.params (** controller-input encoder, backward *)
-    ; con : 'a Dynamics.Mgu.params (** controller RNN *)
+  type ('a, 'd) params =
+    { ic_fwd : ('a, 'd) Dynamics.Mgu.params (** initial-condition encoder, forward *)
+    ; ic_bwd : ('a, 'd) Dynamics.Mgu.params (** initial-condition encoder, backward *)
+    ; ci_fwd : ('a, 'd) Dynamics.Mgu.params (** controller-input encoder, forward *)
+    ; ci_bwd : ('a, 'd) Dynamics.Mgu.params (** controller-input encoder, backward *)
+    ; con : ('a, 'd) Dynamics.Mgu.params (** controller RNN *)
     ; ic_fwd_init : 'a (** [[n_ic]]; learned initial state *)
     ; ic_bwd_init : 'a (** [[n_ic]] *)
     ; ci_fwd_init : 'a (** [[n_ci]] *)
@@ -552,12 +573,43 @@ module Lfads = struct
     ; u_readout : 'a (** [[n_ctrl; 2 m]]; the mean and log-variance of [u_t] *)
     ; u_readout_bias : 'a (** [[2 m]] *)
     }
-  [@@deriving ptree]
+
+  let walk_params cur x =
+    let open Nx.Ptree.Walk in
+    let ic_fwd = field cur "ic_fwd" Dynamics.Mgu.walk_params x.ic_fwd in
+    let ic_bwd = field cur "ic_bwd" Dynamics.Mgu.walk_params x.ic_bwd in
+    let ci_fwd = field cur "ci_fwd" Dynamics.Mgu.walk_params x.ci_fwd in
+    let ci_bwd = field cur "ci_bwd" Dynamics.Mgu.walk_params x.ci_bwd in
+    let con = field cur "con" Dynamics.Mgu.walk_params x.con in
+    let ic_fwd_init = field cur "ic_fwd_init" leaf x.ic_fwd_init in
+    let ic_bwd_init = field cur "ic_bwd_init" leaf x.ic_bwd_init in
+    let ci_fwd_init = field cur "ci_fwd_init" leaf x.ci_fwd_init in
+    let ci_bwd_init = field cur "ci_bwd_init" leaf x.ci_bwd_init in
+    let con_init = field cur "con_init" leaf x.con_init in
+    let ic_readout = field cur "ic_readout" leaf x.ic_readout in
+    let ic_readout_bias = field cur "ic_readout_bias" leaf x.ic_readout_bias in
+    let u_readout = field cur "u_readout" leaf x.u_readout in
+    let u_readout_bias = field cur "u_readout_bias" leaf x.u_readout_bias in
+    { ic_fwd
+    ; ic_bwd
+    ; ci_fwd
+    ; ci_bwd
+    ; con
+    ; ic_fwd_init
+    ; ic_bwd_init
+    ; ci_fwd_init
+    ; ci_bwd_init
+    ; con_init
+    ; ic_readout
+    ; ic_readout_bias
+    ; u_readout
+    ; u_readout_bias
+    }
 
   let structure () =
     Nx.Ptree.instantiate
       (module struct
-        type 'a t = 'a params
+        type ('a, 'd) t = ('a, 'd) params
 
         let walk = walk_params
       end)
@@ -565,9 +617,16 @@ module Lfads = struct
   (* [run_mgu ~phi p ~init inputs] folds the cell over the leading (time)
      axis of [inputs] from the learned [init] state and returns every state,
      of shape [T; n_state]. *)
-  let run_mgu ~phi (p : 'w value Dynamics.Mgu.params) ~(init : 'w value) inputs =
+  let run_mgu
+        ~phi
+        (p : (('w, 'd) value, 'd) Dynamics.Mgu.params)
+        ~(init : ('w, 'd) value)
+        inputs
+    =
     let t_steps = (Nx.shape inputs).(0) in
-    let ks = arange (Nx.dtype inputs) 0 t_steps 1 in
+    let ks =
+      arange_at (Nx.Placement.uncut (Nx.placement inputs)) (Nx.dtype inputs) 0 t_steps 1
+    in
     let _, ys =
       Rune.scan
         Nx.Ptree.tensor
@@ -584,7 +643,7 @@ module Lfads = struct
   (* [encode_ic ~phi p data] is the concatenation of the two
      initial-condition encoders' final states, of shape [[2 n_ic]]. The
      backward encoder reads the reversed data. *)
-  let encode_ic ~phi (p : 'w value params) data =
+  let encode_ic ~phi (p : (('w, 'd) value, 'd) params) data =
     let t_steps = (Nx.shape data).(0) in
     let data_rev = flip ~axes:[ 0 ] data in
     let ic_fwd = run_mgu ~phi p.ic_fwd ~init:p.ic_fwd_init data in
@@ -594,7 +653,7 @@ module Lfads = struct
   (* [encode_con ~phi p data] holds, at row [t], the concatenation of the
      controller-input encoders' states at time [t], of shape [[T; 2 n_ci]].
      The backward encoder's outputs are flipped back to time order. *)
-  let encode_con ~phi (p : 'w value params) data =
+  let encode_con ~phi (p : (('w, 'd) value, 'd) params) data =
     let data_rev = flip ~axes:[ 0 ] data in
     let ci_fwd = run_mgu ~phi p.ci_fwd ~init:p.ci_fwd_init data in
     let ci_bwd = flip ~axes:[ 0 ] (run_mgu ~phi p.ci_bwd ~init:p.ci_bwd_init data_rev) in
@@ -602,7 +661,7 @@ module Lfads = struct
 
   (* [ic_posterior p e_ic] is the mean and log-variance of [x_0], of shape
      [[n]] each. *)
-  let ic_posterior (p : 'w value params) e_ic =
+  let ic_posterior (p : (('w, 'd) value, 'd) params) e_ic =
     split2 ~axis:0 Infix.((e_ic *@ p.ic_readout) + p.ic_readout_bias)
 
   (* [rollout ~phi gen gp p ~e_con ~x0 ~eps] runs the controller and the
@@ -612,11 +671,11 @@ module Lfads = struct
      [[n_steps; n_samples; m]] and the per-step means and log-variances of
      their Gaussian conditionals, both of the same shape. *)
   let rollout
-        (type w d l p e)
+        (type w y l p e)
         ~phi
-        (gen : (w, d, l, p, e) generative)
-        (gp : (w, d, l, p, e) gparams)
-        (p : w value params)
+        (gen : (w, y, l, p, e, 'd) generative)
+        (gp : (w, y, l, p, e) gparams)
+        (p : ((w, 'd) value, 'd) params)
         ~e_con
         ~x0
         ~eps
@@ -624,7 +683,7 @@ module Lfads = struct
     let n_samples = (Nx.shape x0).(0) in
     let n_ctrl = Array.get (Nx.shape p.con_init) 0 in
     let t_steps = gen.n_steps in
-    let ks = arange gen.dtype 0 t_steps 1 in
+    let ks = arange_at (Nx.Placement.uncut (Nx.placement x0)) gen.dtype 0 t_steps 1 in
     let c0 = broadcast_to [| n_samples; n_ctrl |] p.con_init in
     let step (g, c) ((e_con_t, eps_t), k) =
       let e = broadcast_to [| n_samples; (Nx.shape e_con_t).(0) |] e_con_t in
@@ -652,11 +711,11 @@ module Lfads = struct
      by the given inputs, so the replay is exact — the chain rule needs the
      conditionals at the values they conditioned on, nothing else. *)
   let replay
-        (type w d l p e)
+        (type w y l p e)
         ~phi
-        (gen : (w, d, l, p, e) generative)
-        (gp : (w, d, l, p, e) gparams)
-        (p : w value params)
+        (gen : (w, y, l, p, e, 'd) generative)
+        (gp : (w, y, l, p, e) gparams)
+        (p : ((w, 'd) value, 'd) params)
         ~e_con
         ~x0
         ~u
@@ -664,7 +723,7 @@ module Lfads = struct
     let n_samples = (Nx.shape x0).(0) in
     let n_ctrl = Array.get (Nx.shape p.con_init) 0 in
     let t_steps = gen.n_steps in
-    let ks = arange gen.dtype 0 t_steps 1 in
+    let ks = arange_at (Nx.Placement.uncut (Nx.placement x0)) gen.dtype 0 t_steps 1 in
     let c0 = broadcast_to [| n_samples; n_ctrl |] p.con_init in
     let step (g, c) ((e_con_t, u_t), k) =
       let e = broadcast_to [| n_samples; (Nx.shape e_con_t).(0) |] e_con_t in
@@ -687,11 +746,11 @@ module Lfads = struct
     sum ~axes:[ 0 ] lps
 
   let infer
-        (type w d l p e)
+        (type w y l p e)
         ~phi
         ~with_inputs
-        (gen : (w, d, l, p, e) generative)
-        (gp : (w, d, l, p, e) gparams)
+        (gen : (w, y, l, p, e, 'd) generative)
+        (gp : (w, y, l, p, e) gparams)
         ~params
         ?(iters = 0)
         ~n_samples
@@ -706,7 +765,8 @@ module Lfads = struct
     let ic_mean = reshape [| 1; gen.n |] ic_mean
     and ic_logvar = reshape [| 1; gen.n |] ic_logvar in
     let keys = Nx.Rng.split ~n:2 key in
-    let eps_ic = Nx.Rng.normal keys.(0) gen.dtype [| n_samples; gen.n |] in
+    let at = Nx.Placement.uncut (Nx.placement data) in
+    let eps_ic = Nx.Rng.normal_at at ~key:keys.(0) gen.dtype [| n_samples; gen.n |] in
     let x0 = Infix.(ic_mean + (eps_ic * exp (ic_logvar *$ 0.5))) in
     (* The densities are evaluated with the Gaussian means and log-variances
        detached, so that the gradient of the bound reaches the encoder and
@@ -718,10 +778,15 @@ module Lfads = struct
     in
     if not with_inputs
     then
-      { x0; u = zeros gen.dtype [| gen.n_steps; n_samples; gen.m |]; log_prob = ic_logp }
+      { x0
+      ; u = zeros_at at gen.dtype [| gen.n_steps; n_samples; gen.m |]
+      ; log_prob = ic_logp
+      }
     else (
       let e_con = encode_con ~phi params data in
-      let eps = Nx.Rng.normal keys.(1) gen.dtype [| gen.n_steps; n_samples; gen.m |] in
+      let eps =
+        Nx.Rng.normal_at at ~key:keys.(1) gen.dtype [| gen.n_steps; n_samples; gen.m |]
+      in
       let u, mus, logvars = rollout ~phi gen gp params ~e_con ~x0 ~eps in
       let u_logp =
         sum
@@ -731,11 +796,11 @@ module Lfads = struct
       { x0; u; log_prob = Infix.(ic_logp + u_logp) })
 
   let mean
-        (type w d l p e)
+        (type w y l p e)
         ~phi
         ~with_inputs
-        (gen : (w, d, l, p, e) generative)
-        (gp : (w, d, l, p, e) gparams)
+        (gen : (w, y, l, p, e, 'd) generative)
+        (gp : (w, y, l, p, e) gparams)
         ~params
         ?(iters = 0)
         data
@@ -746,23 +811,35 @@ module Lfads = struct
     let ic_mean, _ = ic_posterior params e_ic in
     let x0 = reshape [| 1; gen.n |] ic_mean in
     if not with_inputs
-    then { x0; u = zeros gen.dtype [| gen.n_steps; 1; gen.m |] }
+    then
+      { x0
+      ; u =
+          zeros_at
+            (Nx.Placement.uncut (Nx.placement data))
+            gen.dtype
+            [| gen.n_steps; 1; gen.m |]
+      }
     else (
       let e_con = encode_con ~phi params data in
-      let eps = zeros gen.dtype [| gen.n_steps; 1; gen.m |] in
+      let eps =
+        zeros_at
+          (Nx.Placement.uncut (Nx.placement data))
+          gen.dtype
+          [| gen.n_steps; 1; gen.m |]
+      in
       let u, _, _ = rollout ~phi gen gp params ~e_con ~x0 ~eps in
       { x0; u })
 
   let log_prob
-        (type w d l p e)
+        (type w y l p e)
         ~phi
         ~with_inputs
-        (gen : (w, d, l, p, e) generative)
-        (gp : (w, d, l, p, e) gparams)
+        (gen : (w, y, l, p, e, 'd) generative)
+        (gp : (w, y, l, p, e) gparams)
         ~params
         ?(iters = 0)
         data
-        (samples : w samples)
+        (samples : (w, 'd) samples)
     =
     let _ = iters in
     check_data ~n_steps:gen.n_steps ~n_output:gen.n_output data;

@@ -19,16 +19,21 @@ open Nx
    [N(0, kappa I)]; the reference implementation makes it learnable, and so
    does this one. *)
 
-type 'a params =
+type ('a, 'd) params =
   { mean : 'a
   ; log_stds : 'a
   }
-[@@deriving ptree]
+
+let walk_params cur x =
+  let open Nx.Ptree.Walk in
+  let mean = field cur "mean" leaf x.mean in
+  let log_stds = field cur "log_stds" leaf x.log_stds in
+  { mean; log_stds }
 
 let structure () =
   Nx.Ptree.instantiate
     (module struct
-      type 'a t = 'a params
+      type ('a, 'd) t = ('a, 'd) params
 
       let walk = walk_params
     end)
@@ -55,5 +60,6 @@ let sample p ~key ~n_samples =
   if n_samples <= 0 then invalid_arg "Initial.sample: n_samples must be positive";
   let n = Array.get (shape p.mean) 0 in
   let dtype = Nx.dtype p.mean in
-  let eps = Nx.Rng.normal key dtype [| n_samples; n |] in
+  let at = Nx.Placement.uncut (Nx.placement p.mean) in
+  let eps = Nx.Rng.normal_at at ~key dtype [| n_samples; n |] in
   Infix.(reshape [| 1; n |] p.mean + (eps * exp p.log_stds))

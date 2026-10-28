@@ -6,16 +6,21 @@
 open Base
 open Nx
 
-type 'a params =
+type ('a, 'd) params =
   { d : 'a
   ; t : 'a
   }
-[@@deriving ptree]
+
+let walk_params cur x =
+  let open Nx.Ptree.Walk in
+  let d = field cur "d" leaf x.d in
+  let t = field cur "t" leaf x.t in
+  { d; t }
 
 let structure () =
   Nx.Ptree.instantiate
     (module struct
-      type 'a t = 'a params
+      type ('a, 'd) t = ('a, 'd) params
 
       let walk = walk_params
     end)
