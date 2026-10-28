@@ -9,12 +9,15 @@ type 'a params =
   { w : 'a
   ; b : 'a
   }
-[@@deriving ptree]
 
 module Params = struct
-  type 'a t = 'a params
+  type ('a, _) t = 'a params
 
-  let walk = walk_params
+  let walk c { w; b } =
+    let open Nx.Ptree.Walk in
+    let w = field c "w" leaf w in
+    let b = field c "b" leaf b in
+    { w; b }
 end
 
 let params = Nx.Ptree.instantiate (module Params)
@@ -29,8 +32,8 @@ let () =
   (* y = x @ w_true + b_true + a little noise. *)
   let w_true = create float32 [| 3; 1 |] [| 2.; -1.; 0.5 |] in
   let b_true = 0.3 in
-  let x = randn float32 [| 64; 3 |] in
-  let noise = Infix.(randn float32 [| 64; 1 |] *$ 0.01) in
+  let x = Rng.normal float32 [| 64; 3 |] in
+  let noise = Infix.(Rng.normal float32 [| 64; 1 |] *$ 0.01) in
   let y = Infix.((x *@ w_true) + noise +$ b_true) in
   let loss p =
     let open Infix in

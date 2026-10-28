@@ -1,5 +1,3 @@
 (executable
  (name train)
- (libraries nx nx.dtype rune vega)
- (preprocess
-  (pps ppx_ptree)))
+ (libraries nx rune vega))
