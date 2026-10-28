@@ -12,7 +12,9 @@
     renderer testable without the algebra.
 
     Coordinates are plain host floats in world units chosen by the caller.
-    No camera, page or clipping information appears here. *)
+    No camera, page or clipping information appears here. An adapter reads its
+    object from any device set; {!transform} computes on the host and takes a
+    host motor. *)
 
 (** {1:vectors Points and vectors} *)
 
@@ -104,7 +106,7 @@ type t =
     dilations and transversions have no [Motor.t], so conformal
     transformations must be applied to the algebra object and re-extracted
     with an adapter. *)
-val transform : Geom.Motor.t -> t -> t
+val transform : Nx.host Geom.Motor.t -> t -> t
 
 (** [plane_patch ~normal ~offset] is a square of side four in the plane
     [{x : normal · x = offset}], centred on the point of the plane closest to
@@ -117,42 +119,42 @@ val plane_patch : normal:p3 -> offset:float -> p3 list
 (** [p3_of_tensor v] reads an unbatched tensor of shape [[3]] as a point. It
     is the low-level helper used by the adapters; the adapters assume
     unbatched algebra values. *)
-val p3_of_tensor : Nx.float32_t -> p3
+val p3_of_tensor : 'd Nx.float32_t -> p3
 
 (** [scalar_of_tensor v] reads an unbatched scalar tensor as a float. *)
-val scalar_of_tensor : Nx.float32_t -> float
+val scalar_of_tensor : 'd Nx.float32_t -> float
 
 (** [of_cga_point p] is the point at [Cga.coords p]. An ideal point has no
     finite coordinates and produces an unspecified position. *)
-val of_cga_point : Geom.Cga.t -> t
+val of_cga_point : 'd Geom.Cga.t -> t
 
 (** [of_cga_sphere s] is the sphere of the CGA sphere [s]. *)
-val of_cga_sphere : Geom.Cga.t -> t
+val of_cga_sphere : 'd Geom.Cga.t -> t
 
 (** [of_cga_plane pi] is the plane of the CGA plane [pi], normalized with
     [Cga.normalize_plane] and given a default {!plane_patch}. *)
-val of_cga_plane : Geom.Cga.t -> t
+val of_cga_plane : 'd Geom.Cga.t -> t
 
 (** [of_cga_line ?extent l] is a segment of half-length [extent] (default
     [2.5]) around the point of the finite CGA line [l] closest to the origin.
     A line is infinite; a picture is not. *)
-val of_cga_line : ?extent:float -> Geom.Cga.t -> t
+val of_cga_line : ?extent:float -> 'd Geom.Cga.t -> t
 
 (** [of_cga_circle c] is the circle of the CGA circle [c]. *)
-val of_cga_circle : Geom.Cga.t -> t
+val of_cga_circle : 'd Geom.Cga.t -> t
 
 (** [of_pga_point p] is the projective point [p] at its Euclidean
     coordinates. The point is divided by its weight, so a rescaled
     representative gives the same primitive; an ideal point has zero weight
     and produces an unspecified position. *)
-val of_pga_point : Geom.Pga.t -> t
+val of_pga_point : 'd Geom.Pga.t -> t
 
 (** [of_pga_plane pi] is the plane of the PGA plane [pi]. The plane is
     normalized projectively, so a rescaled representative gives the same
     primitive, and the finite patch is built by {!plane_patch}. *)
-val of_pga_plane : Geom.Pga.t -> t
+val of_pga_plane : 'd Geom.Pga.t -> t
 
 (** [of_pga_line ?extent l] is a segment of half-length [extent] (default
     [2.5]) around the point of the finite PGA line [l] closest to the origin,
     [direction × moment]. The line must not be ideal. *)
-val of_pga_line : ?extent:float -> Geom.Pga.t -> t
+val of_pga_line : ?extent:float -> 'd Geom.Pga.t -> t
